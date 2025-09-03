@@ -1,0 +1,46 @@
+edition: 3.0.0
+name: storage-trigger-service
+access: "default-ms" # todo: 在系统下新建火山引擎的 AK / SK 密钥
+
+vars:
+  sid: "storagetrigger"
+  region: "cn-beijing"
+  functionName: "storage-trigger-function"
+  version: "0.0.1"
+
+resources:
+  framework:
+    component: volcano-vefaas
+    props:
+      common:
+        Region: ${vars.region}
+      function:
+        Name: ${vars.functionName}
+        Description: storage-trigger
+        ExclusiveMode: false
+        RequestTimeout: 300
+        Runtime: python3.12/v1
+        SourceType: zip # 支持 image / zip
+        Source: ../../src
+        MaxConcurrency: 100
+        MemoryMB: 2048
+        Processor: cpu
+        Envs:
+          - Key: TOS_REGION
+            Value: cn-beijing
+          - Key: SERVER_PORT
+            Value: '8000'
+          - Key: POSTGRES_HOST
+            Value: postgresfb9e27de51dc.rds-pg.ivolces.com
+          - Key: POSTGRES_PORT
+            Value: '5432'
+          - Key: POSTGRES_DB
+            Value: aura-PostgreSQL
+          - Key: POSTGRES_USER
+            Value: root
+          - Key: POSTGRES_PASSWORD
+            Value: X1KxZeMkM#nobqKiq
+          - Key: POSTGRES_SCHEMA
+            Value: public
+          - Key: CALL_BACK_URL
+            Value: "https://sd2ruht27399ulo39rt0g.apigateway-cn-beijing.volceapi.com"
