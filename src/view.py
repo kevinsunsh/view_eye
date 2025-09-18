@@ -1,5 +1,5 @@
 from ultralytics import YOLO
-from screen_to_world_locator import deproject_screen_to_world, world_position_from_depth
+from screen_to_world_locator import world_position_from_depth, screen_distance_to_world_distance
 from typing import List, Any, Dict
 import requests
 import json
@@ -860,6 +860,7 @@ def handle_position(user_id:str, chat_id:str):
             matched_nodes = []
             unmatched_indices = []
             world_positions = []
+            world_sizes = []
             base_names: List[str] = []
             for idx, detection in enumerate(detection_results):
                 # 初始名称/描述（仅未匹配用于二阶段纠正前的占位）
@@ -888,10 +889,22 @@ def handle_position(user_id:str, chat_id:str):
                             camera_forward,
                             depth_value,
                         )
+                        world_size = screen_distance_to_world_distance(
+                            np.array([detection['x2'], detection['y2']], dtype=np.float64),
+                            np.array([detection['x1'], detection['y1']], dtype=np.float64),
+                            depth_value,
+                            depth_value,
+                            view_rect,
+                            inv_view_matrix,
+                            inv_proj_matrix,
+                            camera_position,
+                            camera_forward,
+                        )
                         translation_vec = [float(world[0]), float(world[1]), float(world[2])]
                     except Exception as e:
                         print(f"屏幕->世界坐标转换失败(idx={idx}): {e}")
                 world_positions.append(translation_vec)
+                world_sizes.append(world_size)
                 base_names.append(base_name)
 
             try:
@@ -917,7 +930,7 @@ def handle_position(user_id:str, chat_id:str):
                 prefix_groups[pfx].append(it)
 
             # 最近邻匹配（先比较前缀：id 在 '_' 前的部分一致，再比较距离阈值）
-            def nearest_existing_id(pos: list[float], base_name: str) -> str:
+            def nearest_existing_id(pos: list[float], base_name: str, size: float) -> str:
                 best_id = None
                 best_dist2 = 1e9
                 candidates = prefix_groups.get(id_prefix(base_name), [])
@@ -932,14 +945,15 @@ def handle_position(user_id:str, chat_id:str):
                         best_dist2 = d2
                         best_id = existing_id
                 # 阈值（米^2），例如 0.5m -> 0.25
-                return best_id if best_dist2 <= 10000 else None
+                return best_id if best_dist2 <= size * size else None
 
             for idx, detection in enumerate(detection_results):
                 pos = world_positions[idx]
+                size = world_sizes[idx]
                 if pos is None:
                     unmatched_indices.append(idx)
                     continue
-                same_id = nearest_existing_id(pos, base_names[idx])
+                same_id = nearest_existing_id(pos, base_names[idx], size)
                 if same_id:
                     # 找到最近且足够近的已有条目：更新该 id 坐标
                     # 使用已有名称/描述（从 visible_existing 找）

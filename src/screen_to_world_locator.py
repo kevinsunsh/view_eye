@@ -96,6 +96,49 @@ def world_position_from_depth(
     world_position = cam_pos + direction * euclidean_distance
     return world_position
 
+def screen_distance_to_world_distance(
+    screen_pos1: np.ndarray,
+    screen_pos2: np.ndarray,
+    depth1: float,
+    depth2: float,
+    view_rect: tuple,
+    inv_view_matrix: np.ndarray,
+    inv_projection_matrix: np.ndarray,
+    camera_position: np.ndarray,
+    camera_forward: np.ndarray,
+) -> float:
+    """
+    根据屏幕空间的两个点和对应的深度值，计算它们在世界空间中的距离。
+    
+    Args:
+        screen_pos1: 第一个屏幕点坐标 [x, y]
+        screen_pos2: 第二个屏幕点坐标 [x, y]
+        depth1: 第一个点的深度值（米）
+        depth2: 第二个点的深度值（米）
+        view_rect: 视口区域 (min_x, min_y, width, height)
+        inv_view_matrix: 4x4 逆视图矩阵
+        inv_projection_matrix: 4x4 逆投影矩阵
+        camera_position: 相机位置
+        camera_forward: 相机前向向量
+        
+    Returns:
+        两个点在世界空间中的欧几里得距离（米）
+    """
+    # 将两个屏幕点转换为世界坐标
+    world_pos1 = world_position_from_depth(
+        screen_pos1, view_rect, inv_view_matrix, inv_projection_matrix,
+        camera_position, camera_forward, depth1
+    )
+    
+    world_pos2 = world_position_from_depth(
+        screen_pos2, view_rect, inv_view_matrix, inv_projection_matrix,
+        camera_position, camera_forward, depth2
+    )
+    
+    # 计算欧几里得距离
+    distance = np.linalg.norm(world_pos2 - world_pos1)
+    return float(distance)
+
 
 class _Compat:
     @staticmethod
