@@ -1,0 +1,77 @@
+edition: 3.0.0
+name: view-eye-service
+access: "default-ms" # todo: 在系统下新建火山引擎的 AK / SK 密钥
+
+vars:
+  sid: "vieweyeservice"
+  region: "cn-beijing"
+  functionName: "view-eye-service-function"
+  version: "0.0.11"
+
+resources:
+  view_eye_service:
+    component: volcano-vefaas
+    props:
+      common:
+        Region: ${vars.region}
+      function:
+        Name: ${vars.functionName}
+        Description: view-eye-service
+        ExclusiveMode: false
+        RequestTimeout: 300
+        Runtime: native/v1
+        SourceType: image # 支持 image / zip
+        Source: mengs-cn-beijing.cr.volces.com/aura/view_eye:${vars.version}
+        MemoryMB: 4096
+        Processor: cpu
+        Envs:
+          - Key: TOS_REGION
+            Value: cn-beijing
+          - Key: SERVER_PORT
+            Value: '8000'
+          - Key: YOLO_MODEL_PATH
+            Value: /mnt/auto/models/yoloe/
+          - Key: VIEW_EYE_DATA
+            Value: /mnt/auto/assets/
+          - Key: EASYOCR_MODEL_DIR
+            Value: /mnt/auto/models/ocr/
+        VpcConfig:
+          EnableVpc: true
+          EnableSharedInternetAccess: true
+          VpcId: vpc-13g4piwtkhhc03n6nu5hmq2jt
+          SubnetIds:
+            - subnet-rrkuf0d9y800v0x58hi8g42
+          SecurityGroupIds:
+            - sg-13g4pj6oq1r7k3n6nu5jnw94u
+        TosMountConfig:
+          EnableTos: true
+          Credentials:
+            AccessKeyId: ${config('AccessKey')}
+            SecretAccessKey: ${config('SecretKey')}
+          MountPoints:
+            - Endpoint: http://tos-${vars.region}.ivolces.com
+              BucketName: aura-view-eye
+              BucketPath: /
+              LocalMountPath: /mnt/auto
+              ReadOnly: false
+      replicaLimit:
+        MaxInstance: 10
+      triggers:
+        - TriggerName: apig-trigger
+          TriggerType: apig
+          GatewayId: "gd1qqo74fo0m61h76anf0" # todo: 新建 apig 后填写 gatewayId 即可
+          ServiceName: "service-vieweyeservice"
+          UpstreamName: "upstream-vieweyeservice"
+          RouteName: default
+          Path: "/"
+          Method:
+            - POST
+            - GET
+            - PUT
+            - DELETE
+            - HEAD
+            - OPTIONS
+            - CONNECT
+          AdvancedSetting:
+            CorsPolicySetting:
+              Enable: true

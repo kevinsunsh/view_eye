@@ -1,0 +1,3 @@
+[submodule "src/agent_memory"]
+	path = src/agent_memory
+	url = https://github.com/kevinsunsh/agent_memory.git
