@@ -51,6 +51,7 @@ opt-einsum==3.3.0
 packaging==25.0
 paddlex==3.2.1
 pandas==2.3.2
+pgvector==0.4.1
 pillow==11.3.0
 polars==1.33.1
 prettytable==3.16.0

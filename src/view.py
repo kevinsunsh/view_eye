@@ -392,6 +392,46 @@ class ChatModel():
         except Exception as e:
             raise Exception(f"invoke请求异常: {e}")
 
+class EmbeddingModel():
+    def __init__(self, model_name: str, api_key: str, api_base: str):
+        self.model_name = model_name
+        self.api_key = api_key
+        self.api_base = api_base
+
+    def embed(self, input_text: str) -> List[float]:
+        try:
+            payload = {
+                "input": input_text,
+                "model": self.model_name
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            resp = requests.post(f"{self.api_base}/embeddings", headers=headers, json=payload)
+            if resp.status_code != 200:
+                print(f"嵌入请求失败: {resp.status_code} - {resp.text}")
+                return []
+            data = resp.json()
+            emb = ((data or {}).get("data") or [{}])[0].get("embedding", [])
+            
+            # 确保是浮点数组
+            if isinstance(emb, list):
+                try:
+                    emb_array = np.array(emb, dtype=float)
+                    # numpy normalize
+                    emb_normalized = emb_array / np.linalg.norm(emb_array)
+                    # 取前1024个元素
+                    emb_truncated = emb_normalized[:1024]
+                    # 转换为列表
+                    return emb_truncated.tolist()
+                except Exception:
+                    return []
+            return []
+        except Exception as e:
+            print(f"获取文本嵌入异常: {e}")
+            return []
+
 def decode_exr_from_bytes_via_tempfile(exr_bytes: bytes) -> np.ndarray:
     """
     将字节写入临时 .exr 文件后使用 OpenEXR + Imath 读取。
@@ -665,6 +705,16 @@ def handle_position(user_id:str, chat_id:str):
         api_base=os.environ.get("VLM_API_BASE", "https://ark.cn-beijing.volces.com/api/v3"),
         model_provider="openai"
     )
+    embedding_model = EmbeddingModel(
+        model_name=os.environ.get("EMB_MODEL_NAME", "doubao-embedding-large-text-250515"),
+        api_key=os.environ.get("VLM_API_KEY", "dc7e10e7-1095-40ae-a172-3a7d16fc1e61"),
+        api_base=os.environ.get("VLM_API_BASE", "https://ark.cn-beijing.volces.com/api/v3"),
+    )
+    # desc_vec = embedding_model.embed("海报")
+    # user_info = UserInfoManager().get_user_info_by_user_id(user_id)
+    # scene_id = user_info.current_scene_id
+    # items = SceneItemsManager().search_items_by_description_vector(scene_id, desc_vec, top_k=10)
+    # print(f"desc_vec: {items}")
     look_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/look.jpg"
     cam_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/cam.json"
     depth_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/depth.exr"
@@ -734,7 +784,7 @@ def handle_position(user_id:str, chat_id:str):
             cls = int(box.cls[0].cpu().numpy())  # 类别ID
             
             class_name = result.names.get(cls, 'Unknown') if hasattr(result, 'names') and result.names else 'Unknown'
-            
+            class_name = class_name.replace(' ', '_')
             detection_info = {
                 'index': i + 1,
                 'x1': float(xyxy[0]),
@@ -855,7 +905,6 @@ def handle_position(user_id:str, chat_id:str):
             # 获取场景ID（用于距离匹配与写库）
             user_info = UserInfoManager().get_user_info_by_user_id(user_id)
             scene_id = user_info.current_scene_id
-
             # 先为全部检测计算世界坐标
             matched_nodes = []
             unmatched_indices = []
@@ -875,6 +924,7 @@ def handle_position(user_id:str, chat_id:str):
                 cx_px = (detection['x2'] - detection['x1']) / 2 + detection['x1']
                 cy_px = (detection['y2'] - detection['y1']) / 2 + detection['y1']
                 translation_vec = [0.0, 0.0, 0.0]
+                world_size = 0.3
                 if inv_proj_matrix is not None and inv_view_matrix is not None and depth_linear is not None and camera_position is not None and camera_forward is not None:
                     try:
                         u0 = int(np.clip(np.floor(cx_px), 0, img_w - 1))
@@ -906,7 +956,6 @@ def handle_position(user_id:str, chat_id:str):
                 world_positions.append(translation_vec)
                 world_sizes.append(world_size)
                 base_names.append(base_name)
-
             try:
                 if 'proj_matrix' in locals() and 'view_matrix' in locals():
                     view_proj_matrix = proj_matrix @ view_matrix
@@ -914,39 +963,47 @@ def handle_position(user_id:str, chat_id:str):
                     existing_items = db_manager.get_scene_items_in_frustum_by_view_proj(view_proj_matrix, existing_items)
             except Exception as _:
                 pass
-
-            # 按前缀对现有物品分组，加速匹配
-            def id_prefix(s: str) -> str:
-                if s is None:
-                    return ''
-                i = s.find('_')
-                return s if i == -1 else s[:i]
-
-            prefix_groups = {}
+            item_type_groups = {}
             for it in existing_items:
-                pfx = id_prefix(it.get('item_id'))
-                if pfx not in prefix_groups:
-                    prefix_groups[pfx] = []
-                prefix_groups[pfx].append(it)
-
-            # 最近邻匹配（先比较前缀：id 在 '_' 前的部分一致，再比较距离阈值）
+                type = (it.get('item_type'))
+                if type not in item_type_groups:
+                    item_type_groups[type] = []
+                item_type_groups[type].append(it)
+            # AABB 相交匹配（同类型/前缀），相交则认为同一ID；如多项相交，取交叠体积最大的
             def nearest_existing_id(pos: list[float], base_name: str, size: float) -> str:
-                best_id = None
-                best_dist2 = 1e9
-                candidates = prefix_groups.get(id_prefix(base_name), [])
-                for it in candidates:
-                    # 仅比较 id 前缀一致的已有项
-                    existing_id = it.get('item_id')
-                    dx = it.get('world_pos_x', 0.0) - pos[0]
-                    dy = it.get('world_pos_y', 0.0) - pos[1]
-                    dz = it.get('world_pos_z', 0.0) - pos[2]
-                    d2 = dx*dx + dy*dy + dz*dz
-                    if d2 < best_dist2:
-                        best_dist2 = d2
-                        best_id = existing_id
-                # 阈值（米^2），例如 0.5m -> 0.25
-                return best_id if best_dist2 <= size * size else None
+                half = max(0.01, float(size) / 2.0)
+                new_min = [pos[0] - half, pos[1] - half, pos[2] - half]
+                new_max = [pos[0] + half, pos[1] + half, pos[2] + half]
 
+                def overlap1d(a_min: float, a_max: float, b_min: float, b_max: float) -> float:
+                    return max(0.0, min(a_max, b_max) - max(a_min, b_min))
+
+                def overlap_volume(a_min, a_max, b_min, b_max) -> float:
+                    ox = overlap1d(a_min[0], a_max[0], b_min[0], b_max[0])
+                    oy = overlap1d(a_min[1], a_max[1], b_min[1], b_max[1])
+                    oz = overlap1d(a_min[2], a_max[2], b_min[2], b_max[2])
+                    return ox * oy * oz
+
+                best_id = None
+                best_vol = 0.0
+                candidates = item_type_groups.get(base_name, [])
+                for it in candidates:
+                    ex_min = [
+                        float(it.get('world_bb_x', it.get('world_pos_x', 0.0))),
+                        float(it.get('world_bb_y', it.get('world_pos_y', 0.0))),
+                        float(it.get('world_bb_z', it.get('world_pos_z', 0.0)))
+                    ]
+                    ex_max = [
+                        ex_min[0] + float(it.get('world_bb_w', 0.0)),
+                        ex_min[1] + float(it.get('world_bb_h', 0.0)),
+                        ex_min[2] + float(it.get('world_bb_d', 0.0))
+                    ]
+                    vol = overlap_volume(new_min, new_max, ex_min, ex_max)
+                    if vol > best_vol:
+                        best_vol = vol
+                        best_id = it.get('item_id')
+
+                return best_id if best_vol > 0.0 else None
             for idx, detection in enumerate(detection_results):
                 pos = world_positions[idx]
                 size = world_sizes[idx]
@@ -960,19 +1017,23 @@ def handle_position(user_id:str, chat_id:str):
                     found = next((it for it in existing_items if it.get('item_id') == same_id), None)
                     base_name = detection.get('class_name', 'Unknown') if detection['type'] == 'object' else 'text'
                     base_desc = detection.get('class_name', base_name) if detection['type'] == 'object' else detection.get('text_content','text')
+                    half = max(0.01, float(size) / 2.0)
+                    bb_min = [pos[0] - half, pos[1] - half, pos[2] - half]
+                    bb_max = [pos[0] + half, pos[1] + half, pos[2] + half]
                     node_data = {
-                        'item_id': same_id,
+                        'item_type': (found or {}).get('item_type', 'Unknown'),
+                        'item_name': (found or {}).get('item_name', 'Unknown'),
                         'description': (found or {}).get('description', base_desc),
                         'description_vector': [],
                         'translation': pos,
                         'extras': {
-                            'tags': [(found or {}).get('item_name', base_name)],
+                            'tags': [(found or {}).get('item_id', base_name)],
                             'boundingBox': {
-                                'min': [detection['x1'], detection['y1'], 0.0],
-                                'max': [detection['x2'], detection['y2'], 1.0]
+                                'min': bb_min,
+                                'max': bb_max
                             },
-                            'actions': [],
-                            'skills': [],
+                            'actions': {},
+                            'skills': {},
                             'detection_type': detection['type'],
                             'confidence': detection['conf'],
                             'class_id': detection.get('class_id', -1),
@@ -1004,35 +1065,39 @@ def handle_position(user_id:str, chat_id:str):
                     }
                     for k, t in enumerate(unmatched_texts_raw)
                 ]
-
                 # VLM 更正
                 obj_corr = correct_detection_with_vl(chat_model, look_url, unmatched_objects) if unmatched_objects else []
                 txt_corr = correct_ocr_with_vl(chat_model, look_url, unmatched_texts) if unmatched_texts else []
-
                 # 组装第二批待写入节点（新项）
                 batch_new_nodes = []
                 # 对象
                 for j, det in enumerate(unmatched_objects):
                     corrected_name = obj_corr[j].get('corrected_class', det.get('class_name', 'Unknown')) if obj_corr and j < len(obj_corr) else det.get('class_name', 'Unknown')
                     corrected_desc = obj_corr[j].get('desc', corrected_name) if obj_corr and j < len(obj_corr) else corrected_name
+                    desc_vec = embedding_model.embed(corrected_desc) if corrected_desc else []
                     idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is det][0]]
                     wp = world_positions[idx]
-                    item_id = unmatched_objects[j].get('class_name', 'Unknown')
-                    index = len(prefix_groups[item_id]) if item_id in prefix_groups else 0
-                    item_id = f"{item_id}_{index}"
+                    ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
+                    half = max(0.01, float(ws) / 2.0)
+                    bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
+                    bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
+                    item_type = unmatched_objects[j].get('class_name', 'Unknown')
+                    index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
+                    item_id = f"{item_type}_{index}"
                     node = {
+                        'item_type': item_type,
                         'item_name': corrected_name,
                         'description': corrected_desc,
-                        'description_vector': [],
+                        'description_vector': desc_vec,
                         'translation': wp,
                         'extras': {
                             'tags': [item_id],
                             'boundingBox': {
-                                'min': [det['x1'], det['y1'], 0.0],
-                                'max': [det['x2'], det['y2'], 1.0]
+                                'min': bb_min,
+                                'max': bb_max
                             },
-                            'actions': [],
-                            'skills': [],
+                            'actions': {},
+                            'skills': {},
                             'detection_type': det['type'],
                             'confidence': det['conf'],
                             'class_id': det.get('class_id', -1),
@@ -1044,23 +1109,29 @@ def handle_position(user_id:str, chat_id:str):
                 for j, t in enumerate(unmatched_texts_raw):
                     text_val = txt_corr[j].get('text_content', t.get('text_content', '')) if txt_corr and j < len(txt_corr) else t.get('text_content', '')
                     desc_val = f"文字: {text_val}" if text_val else 'text'
+                    desc_vec = embedding_model.embed(desc_val) if desc_val else []
                     idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is t][0]]
                     wp = world_positions[idx]
-                    index = len(prefix_groups['text']) if 'text' in prefix_groups else 0
+                    ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
+                    half = max(0.01, float(ws) / 2.0)
+                    bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
+                    bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
+                    index = len(item_type_groups['text']) if 'text' in item_type_groups else 0
                     item_id = f"text_{index}"
                     node = {
+                        'item_type': 'text',
                         'item_name': '文字内容',
                         'description': desc_val,
-                        'description_vector': [],
+                        'description_vector': desc_vec,
                         'translation': wp,
                         'extras': {
                             'tags': [item_id],
                             'boundingBox': {
-                                'min': [t['x1'], t['y1'], 0.0],
-                                'max': [t['x2'], t['y2'], 1.0]
+                                'min': bb_min,
+                                'max': bb_max
                             },
-                            'actions': [],
-                            'skills': [],
+                            'actions': {},
+                            'skills': {},
                             'detection_type': 'text',
                             'confidence': t['conf'],
                             'class_id': t.get('class_id', -1),
@@ -1068,7 +1139,6 @@ def handle_position(user_id:str, chat_id:str):
                         }
                     }
                     batch_new_nodes.append(node)
-
                 if batch_new_nodes:
                     _ = db_manager.upsert_scene_items_batch(scene_id, batch_new_nodes)
                 
