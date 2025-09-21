@@ -422,7 +422,7 @@ class EmbeddingModel():
                     # numpy normalize
                     emb_normalized = emb_array / np.linalg.norm(emb_array)
                     # 取前1024个元素
-                    emb_truncated = emb_normalized[:1024]
+                    emb_truncated = emb_normalized[:256]
                     # 转换为列表
                     return emb_truncated.tolist()
                 except Exception:
@@ -956,19 +956,17 @@ def handle_position(user_id:str, chat_id:str):
                 world_positions.append(translation_vec)
                 world_sizes.append(world_size)
                 base_names.append(base_name)
-            try:
-                if 'proj_matrix' in locals() and 'view_matrix' in locals():
-                    view_proj_matrix = proj_matrix @ view_matrix
-                    existing_items = db_manager.get_scene_items_by_distance(camera_position, 100000, scene_id, "MHC_Talker")
-                    existing_items = db_manager.get_scene_items_in_frustum_by_view_proj(view_proj_matrix, existing_items)
-            except Exception as _:
-                pass
+            # try:
+            #     if 'proj_matrix' in locals() and 'view_matrix' in locals():
+            #         view_proj_matrix = proj_matrix @ view_matrix
+            #         existing_items = db_manager.get_scene_items_by_distance(camera_position, 100000, scene_id, ["Nova", "Zoe", "Eva", "Nova老", "nova", "MHC_Talker"])
+            #         existing_items = db_manager.get_scene_items_in_frustum_by_view_proj(view_proj_matrix, existing_items)
+            # except Exception as _:
+            #     pass
             item_type_groups = {}
-            for it in existing_items:
-                type = (it.get('item_type'))
+            for type in base_names:
                 if type not in item_type_groups:
-                    item_type_groups[type] = []
-                item_type_groups[type].append(it)
+                    item_type_groups[type] = db_manager.get_scene_items_by_type(scene_id, type)
             # AABB 相交匹配（同类型/前缀），相交则认为同一ID；如多项相交，取交叠体积最大的
             def nearest_existing_id(pos: list[float], base_name: str, size: float) -> str:
                 half = max(0.01, float(size) / 2.0)
@@ -984,10 +982,11 @@ def handle_position(user_id:str, chat_id:str):
                     oz = overlap1d(a_min[2], a_max[2], b_min[2], b_max[2])
                     return ox * oy * oz
 
-                best_id = None
+                best_item = None
                 best_vol = 0.0
                 candidates = item_type_groups.get(base_name, [])
-                for it in candidates:
+                for item in candidates:
+                    it = item.to_dict()
                     ex_min = [
                         float(it.get('world_bb_x', it.get('world_pos_x', 0.0))),
                         float(it.get('world_bb_y', it.get('world_pos_y', 0.0))),
@@ -1001,20 +1000,17 @@ def handle_position(user_id:str, chat_id:str):
                     vol = overlap_volume(new_min, new_max, ex_min, ex_max)
                     if vol > best_vol:
                         best_vol = vol
-                        best_id = it.get('item_id')
+                        best_item = it
 
-                return best_id if best_vol > 0.0 else None
+                return best_item if best_vol > 0.0 else None
             for idx, detection in enumerate(detection_results):
                 pos = world_positions[idx]
                 size = world_sizes[idx]
                 if pos is None:
                     unmatched_indices.append(idx)
                     continue
-                same_id = nearest_existing_id(pos, base_names[idx], size)
-                if same_id:
-                    # 找到最近且足够近的已有条目：更新该 id 坐标
-                    # 使用已有名称/描述（从 visible_existing 找）
-                    found = next((it for it in existing_items if it.get('item_id') == same_id), None)
+                found = nearest_existing_id(pos, base_names[idx], size)
+                if found:
                     base_name = detection.get('class_name', 'Unknown') if detection['type'] == 'object' else 'text'
                     base_desc = detection.get('class_name', base_name) if detection['type'] == 'object' else detection.get('text_content','text')
                     half = max(0.01, float(size) / 2.0)
@@ -1024,7 +1020,7 @@ def handle_position(user_id:str, chat_id:str):
                         'item_type': (found or {}).get('item_type', 'Unknown'),
                         'item_name': (found or {}).get('item_name', 'Unknown'),
                         'description': (found or {}).get('description', base_desc),
-                        'description_vector': [],
+                        'description_vector': (found or {}).get('description_vector', []),
                         'translation': pos,
                         'extras': {
                             'tags': [(found or {}).get('item_id', base_name)],
@@ -1032,8 +1028,8 @@ def handle_position(user_id:str, chat_id:str):
                                 'min': bb_min,
                                 'max': bb_max
                             },
-                            'actions': {},
-                            'skills': {},
+                            'actions': (found or {}).get('actions', {}),
+                            'skills': (found or {}).get('skills', {}),
                             'detection_type': detection['type'],
                             'confidence': detection['conf'],
                             'class_id': detection.get('class_id', -1),
