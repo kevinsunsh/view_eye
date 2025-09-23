@@ -3,7 +3,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from view import handle_position
+from view import handle_position, label_objects
 load_dotenv()
 
 app = FastAPI(

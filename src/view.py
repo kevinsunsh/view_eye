@@ -1,3 +1,4 @@
+from operator import index
 from ultralytics import YOLO
 from screen_to_world_locator import world_position_from_depth, screen_distance_to_world_distance
 from typing import List, Any, Dict
@@ -21,6 +22,55 @@ from agent_memory.user_info.manager import DBManager as UserInfoManager
 from agent_memory.prompt_manager.scene_iteams.manager import DBManager as SceneItemEntryManager
 
 # --------------- 通用工具 ---------------
+import numpy as np
+
+def build_perspective_projection_matrix(
+    fov_degrees: float = 60.0,
+    aspect_ratio: float = 1.0,
+    near: float = 0.1,
+    far: float = 1000.0
+) -> np.ndarray:
+    """
+    构建 Unreal Engine 风格的左手透视投影矩阵（DirectX 裁剪空间 Z ∈ [0,1]）
+    摄像机朝向 +Z，Y 向上，X 向右。
+
+    返回 4x4 行主序 numpy 矩阵，可直接用于 VP = Proj @ View
+    """
+    if near <= 0 or far <= near:
+        raise ValueError("near must be > 0 and far must be > near")
+
+    fov_rad = np.radians(fov_degrees)
+    tan_half_fov = np.tan(fov_rad / 2)
+
+    # 垂直方向缩放（基于垂直FOV）
+    y_scale = 1.0 / tan_half_fov
+    x_scale = y_scale / aspect_ratio
+
+    # Z 映射：z_clip = A * z + B, 且要求：
+    #   z = near → z_ndc = 0
+    #   z = far  → z_ndc = 1
+    # 解得：
+    #   A = far / (far - near)
+    #   B = -near * far / (far - near)
+    # 但在矩阵中：
+    #   clip.z = A * z + B
+    #   clip.w = z
+    # 所以在齐次裁剪空间中：
+    #   ndc.z = clip.z / clip.w = A + B / z
+
+    A = far / (far - near)
+    B = -near * far / (far - near)
+
+    # 构造 4x4 行主序矩阵
+    proj = np.array([
+        [x_scale, 0,       0,  0],
+        [0,       y_scale, 0,  0],
+        [0,       0,       A,  1],  # Unreal: 注意这里是 1，不是 0！
+        [0,       0,       B,  0]
+    ], dtype=np.float64)
+
+    return proj
+
 def build_rts_matrix(translation: List[float], rotation_deg: List[float], scale: List[float]) -> np.ndarray:
     """
     构建 4x4 的旋转-平移-缩放变换矩阵。
@@ -755,7 +805,7 @@ def handle_position(user_id:str, chat_id:str):
     results = model.predict(look_img)
     # 解析results[0]的内容
     result = results[0]
-    # result.save(f"look_{user_id}_{chat_id}.jpg")
+    result.save(f"look_{user_id}_{chat_id}.jpg")
     print("=== YOLO检测结果解析 ===")
     print(f"检测到的对象数量: {len(result.boxes) if result.boxes is not None else 0}")
     
@@ -794,7 +844,9 @@ def handle_position(user_id:str, chat_id:str):
                 'conf': float(conf),
                 'class_id': cls,
                 'class_name': class_name,
-                'type': 'object'  # 标记为物体类型
+                'type': 'object',  # 标记为物体类型
+                'item_names': [],
+                "interactive_points": []
             }
             detection_results.append(detection_info)
             
@@ -817,7 +869,9 @@ def handle_position(user_id:str, chat_id:str):
             'class_id': -1,  # OCR文字使用特殊ID
             'class_name': 'text',
             'text_content': ocr_item['text'],  # 存储聚类后的文字内容
-            'type': 'text'  # 标记为文字类型
+            'type': 'text',  # 标记为文字类型
+            'item_names': [],
+            "interactive_points": []
         }
         detection_results.append(ocr_detection)
         print(f"  文字对象 {i+1}: '{ocr_item['text']}' (置信度: {ocr_item['confidence']:.3f})")
@@ -841,38 +895,32 @@ def handle_position(user_id:str, chat_id:str):
     # near_plane = 0.1
     # far_plane = 100.0
     
-    try:
-        print(f"正在解析 cam.json（内存）")
-        print(f"cam.json 下载成功，包含 {len(cam_data)} 个键")
-        # 优先读取分离的 proj/view 矩阵
-        proj = cam_data.get('projection_matrix')
-        view_m = cam_data.get('view_matrix')
-        # # 近远裁剪面（若提供）
-        # if isinstance(cam_data.get('near'), (int, float)):
-        #     near_plane = float(cam_data['near'])
-        # if isinstance(cam_data.get('far'), (int, float)):
-        #     far_plane = float(cam_data['far'])
-        if isinstance(proj, list) and len(proj) == 16 and isinstance(view_m, list) and len(view_m) == 16:
-            proj_matrix = np.array([proj[i*4:(i+1)*4] for i in range(4)], dtype=np.float64).transpose()
-            view_matrix = np.array([view_m[i*4:(i+1)*4] for i in range(4)], dtype=np.float64).transpose()
-            print("已解析分离的 proj/view 矩阵 (4x4)")
-            try:
-                inv_proj_matrix = np.linalg.inv(proj_matrix)
-                inv_view_matrix = np.linalg.inv(view_matrix)
-                camera_position = inv_view_matrix[:3, 3]
-                cam_fwd_h = inv_view_matrix @ np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float64)
-                camera_forward = cam_fwd_h[:3]
-                n = np.linalg.norm(camera_forward)
-                if n > 0:
-                    camera_forward = camera_forward / n
-            except Exception as e:
-                print(f"计算 inv_proj/inv_view 或相机参数失败: {e}")
-    except requests.exceptions.RequestException as e:
-        print(f"下载 cam.json 失败: {e}")
-    except json.JSONDecodeError as e:
-        print(f"解析 cam.json 失败: {e}")
-    except Exception as e:
-        print(f"处理 cam.json 时出错: {e}")
+    print(f"正在解析 cam.json（内存）")
+    print(f"cam.json 下载成功，包含 {len(cam_data)} 个键")
+    # 构建正方形viewport的投影矩阵，替代从cam_data读取的矩阵
+    # print("构建正方形viewport的投影矩阵...")
+    # proj_matrix = build_perspective_projection_matrix(
+    #     fov_degrees=90.0,  # 60度视场角
+    #     aspect_ratio=1.0,  # 正方形viewport
+    #     near=0.1,          # 近裁剪面
+    #     far=100000.0         # 远裁剪面
+    # )
+    # print(f"构建的投影矩阵:\n{proj_matrix}")
+    # 优先读取分离的 view 矩阵
+    view_matrix = cam_data.get('view_matrix')
+    proj_matrix = cam_data.get('projection_matrix')
+    print(f"view_matrix: {view_matrix}")
+    view_matrix = np.array([view_matrix[i*4:(i+1)*4] for i in range(4)], dtype=np.float64).transpose()
+    proj_matrix = np.array([proj_matrix[i*4:(i+1)*4] for i in range(4)], dtype=np.float64).transpose()
+    print("已解析 view 矩阵 (4x4)")
+    inv_proj_matrix = np.linalg.inv(proj_matrix)
+    inv_view_matrix = np.linalg.inv(view_matrix)
+    camera_position = inv_view_matrix[:3, 3]
+    cam_fwd_h = inv_view_matrix @ np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float64)
+    camera_forward = cam_fwd_h[:3]
+    n = np.linalg.norm(camera_forward)
+    if n > 0:
+        camera_forward = camera_forward / n
     # 读取 EXR 线性深度图（内存）
     try:
         print(f"正在解析 depth.exr（内存）")
@@ -904,10 +952,11 @@ def handle_position(user_id:str, chat_id:str):
             
             # 获取场景ID（用于距离匹配与写库）
             user_info = UserInfoManager().get_user_info_by_user_id(user_id)
-            scene_id = user_info.current_scene_id
+            # scene_id = user_info.current_scene_id
+            scene_id = "d8943faa-bf00-481b-95af-c73bd04c1eb7"
             # 先为全部检测计算世界坐标
             matched_nodes = []
-            unmatched_indices = []
+            matched_nodes_id = []
             world_positions = []
             world_sizes = []
             base_names: List[str] = []
@@ -954,6 +1003,7 @@ def handle_position(user_id:str, chat_id:str):
                     except Exception as e:
                         print(f"屏幕->世界坐标转换失败(idx={idx}): {e}")
                 world_positions.append(translation_vec)
+                detection['world_pos'] = translation_vec
                 world_sizes.append(world_size)
                 base_names.append(base_name)
             # try:
@@ -963,182 +1013,397 @@ def handle_position(user_id:str, chat_id:str):
             #         existing_items = db_manager.get_scene_items_in_frustum_by_view_proj(view_proj_matrix, existing_items)
             # except Exception as _:
             #     pass
-            item_type_groups = {}
-            for type in base_names:
-                if type not in item_type_groups:
-                    item_type_groups[type] = db_manager.get_scene_items_by_type(scene_id, type)
+            # item_type_groups = {}
+            # for type in base_names:
+            #     if type not in item_type_groups:
+            #         item_type_groups[type] = db_manager.get_scene_items_by_type(scene_id, type)
             # AABB 相交匹配（同类型/前缀），相交则认为同一ID；如多项相交，取交叠体积最大的
-            def nearest_existing_id(pos: list[float], base_name: str, size: float) -> str:
-                half = max(0.01, float(size) / 2.0)
-                new_min = [pos[0] - half, pos[1] - half, pos[2] - half]
-                new_max = [pos[0] + half, pos[1] + half, pos[2] + half]
+            # def nearest_existing_id(pos: list[float], base_name: str, size: float) -> str:
+            #     half = max(0.01, float(size) / 2.0)
+            #     new_min = [pos[0] - half, pos[1] - half, pos[2] - half]
+            #     new_max = [pos[0] + half, pos[1] + half, pos[2] + half]
 
-                def overlap1d(a_min: float, a_max: float, b_min: float, b_max: float) -> float:
-                    return max(0.0, min(a_max, b_max) - max(a_min, b_min))
+            #     def overlap1d(a_min: float, a_max: float, b_min: float, b_max: float) -> float:
+            #         return max(0.0, min(a_max, b_max) - max(a_min, b_min))
 
-                def overlap_volume(a_min, a_max, b_min, b_max) -> float:
-                    ox = overlap1d(a_min[0], a_max[0], b_min[0], b_max[0])
-                    oy = overlap1d(a_min[1], a_max[1], b_min[1], b_max[1])
-                    oz = overlap1d(a_min[2], a_max[2], b_min[2], b_max[2])
-                    return ox * oy * oz
+            #     def overlap_volume(a_min, a_max, b_min, b_max) -> float:
+            #         ox = overlap1d(a_min[0], a_max[0], b_min[0], b_max[0])
+            #         oy = overlap1d(a_min[1], a_max[1], b_min[1], b_max[1])
+            #         oz = overlap1d(a_min[2], a_max[2], b_min[2], b_max[2])
+            #         return ox * oy * oz
 
-                best_item = None
-                best_vol = 0.0
-                candidates = item_type_groups.get(base_name, [])
-                for item in candidates:
-                    it = item.to_dict()
-                    ex_min = [
-                        float(it.get('world_bb_x', it.get('world_pos_x', 0.0))),
-                        float(it.get('world_bb_y', it.get('world_pos_y', 0.0))),
-                        float(it.get('world_bb_z', it.get('world_pos_z', 0.0)))
-                    ]
-                    ex_max = [
-                        ex_min[0] + float(it.get('world_bb_w', 0.0)),
-                        ex_min[1] + float(it.get('world_bb_h', 0.0)),
-                        ex_min[2] + float(it.get('world_bb_d', 0.0))
-                    ]
-                    vol = overlap_volume(new_min, new_max, ex_min, ex_max)
-                    if vol > best_vol:
-                        best_vol = vol
-                        best_item = it
+            #     best_item = None
+            #     best_vol = 0.0
+            #     candidates = item_type_groups.get(base_name, [])
+            #     for item in candidates:
+            #         it = item.to_dict()
+            #         ex_min = [
+            #             float(it.get('world_bb_x', it.get('world_pos_x', 0.0))),
+            #             float(it.get('world_bb_y', it.get('world_pos_y', 0.0))),
+            #             float(it.get('world_bb_z', it.get('world_pos_z', 0.0)))
+            #         ]
+            #         ex_max = [
+            #             ex_min[0] + float(it.get('world_bb_w', 0.0)),
+            #             ex_min[1] + float(it.get('world_bb_h', 0.0)),
+            #             ex_min[2] + float(it.get('world_bb_d', 0.0))
+            #         ]
+            #         vol = overlap_volume(new_min, new_max, ex_min, ex_max)
+            #         if vol > best_vol:
+            #             best_vol = vol
+            #             best_item = it
 
-                return best_item if best_vol > 0.0 else None
+            #     return best_item if best_vol > 0.0 else None
+            process_items = {}
             for idx, detection in enumerate(detection_results):
                 pos = world_positions[idx]
-                size = world_sizes[idx]
                 if pos is None:
-                    unmatched_indices.append(idx)
                     continue
-                found = nearest_existing_id(pos, base_names[idx], size)
-                if found:
-                    base_name = detection.get('class_name', 'Unknown') if detection['type'] == 'object' else 'text'
-                    base_desc = detection.get('class_name', base_name) if detection['type'] == 'object' else detection.get('text_content','text')
-                    half = max(0.01, float(size) / 2.0)
-                    bb_min = [pos[0] - half, pos[1] - half, pos[2] - half]
-                    bb_max = [pos[0] + half, pos[1] + half, pos[2] + half]
-                    node_data = {
-                        'item_type': (found or {}).get('item_type', 'Unknown'),
-                        'item_name': (found or {}).get('item_name', 'Unknown'),
-                        'description': (found or {}).get('description', base_desc),
-                        'description_vector': (found or {}).get('description_vector', []),
-                        'translation': pos,
-                        'extras': {
-                            'tags': [(found or {}).get('item_id', base_name)],
-                            'boundingBox': {
-                                'min': bb_min,
-                                'max': bb_max
-                            },
-                            'actions': (found or {}).get('actions', {}),
-                            'skills': (found or {}).get('skills', {}),
-                            'detection_type': detection['type'],
-                            'confidence': detection['conf'],
-                            'class_id': detection.get('class_id', -1),
-                            'original_class': detection.get('class_name', 'Unknown')
-                        }
-                    }
-                    matched_nodes.append(node_data)
-                else:
-                    unmatched_indices.append(idx)
-            
-            # 第一阶段：仅更新匹配到的项
-            if matched_nodes:
-                # 注意：upsert 会以 tags[0] 作为 item_name，item_id 将按名称去重生成；
-                # 这里仅用于更新已有项的位置，因此 tags[0] 使用已有 item_name
-                _ = db_manager.upsert_scene_items_batch(scene_id, matched_nodes)
+                found_item = db_manager.query_item_include_position(scene_id, pos)
+                if found_item:
+                    if detection['class_name'] not in found_item['item_type']:
+                        detection['item_names'].append(found_item['item_name'])
+                        if found_item['item_name'] not in process_items:
+                            process_items[found_item['item_name']] = found_item
+                #     base_name = detection.get('class_name', 'Unknown') if detection['type'] == 'object' else 'text'
+                #     base_desc = detection.get('class_name', base_name) if detection['type'] == 'object' else detection.get('text_content','text')
+                #     half = max(0.01, float(size) / 2.0)
+                #     bb_min = [pos[0] - half, pos[1] - half, pos[2] - half]
+                #     bb_max = [pos[0] + half, pos[1] + half, pos[2] + half]
+                #     node_data = {
+                #         'item_type': (found or {}).get('item_type', 'Unknown'),
+                #         'item_name': (found or {}).get('item_name', 'Unknown'),
+                #         'description': (found or {}).get('description', base_desc),
+                #         'description_vector': (found or {}).get('description_vector', []),
+                #         'translation': pos,
+                #         'extras': {
+                #             'tags': [(found or {}).get('item_id', base_name)],
+                #             'boundingBox': {
+                #                 'min': bb_min,
+                #                 'max': bb_max
+                #             },
+                #             'actions': (found or {}).get('actions', {}),
+                #             'skills': (found or {}).get('skills', {}),
+                #             'detection_type': detection['type'],
+                #             'confidence': detection['conf'],
+                #             'class_id': detection.get('class_id', -1),
+                #             'original_class': detection.get('class_name', 'Unknown')
+                #         }
+                #     }
+                #     matched_nodes.append(node_data)
+                # else:
+                #     unmatched_indices.append(idx)
+            unmatched_objects = [object_result for object_result in detection_results if object_result['type'] == 'object' and len(object_result['item_names']) > 0]
+            unmatched_texts_raw = [object_result for object_result in detection_results if object_result['type'] == 'text' and len(object_result['item_names']) > 0]
+            # 调整文字为 VL 所需精简格式
+            unmatched_texts = [
+                {
+                    'index': k + 1,
+                    'x1': t['x1'], 'y1': t['y1'], 'x2': t['x2'], 'y2': t['y2'],
+                    'conf': t['conf'], 'text_content': t.get('text_content', ''),
+                    'item_names': t['item_names'],
+                    'world_pos': t['world_pos']
+                }
+                for k, t in enumerate(unmatched_texts_raw)
+            ]
+            # VLM 更正
+            obj_corr = correct_detection_with_vl(chat_model, look_url, unmatched_objects) if unmatched_objects else []
+            txt_corr = correct_ocr_with_vl(chat_model, look_url, unmatched_texts) if unmatched_texts else []
+
+            for idx, new_obj in enumerate(obj_corr):
+                for item_name in unmatched_objects[idx]['item_names']:
+                    item = process_items[item_name]
+                    if unmatched_objects[idx]['class_name'] not in item['item_type']:
+                        item['description'] = item['description'] + ";" + new_obj['desc']
+                        item['description_vector'] = embedding_model.embed(item['description'])
+                    item['item_type'] = item['item_type'] + ";" + unmatched_objects[idx]['class_name']
+                    if item['interactive_points'] is None:
+                        item['interactive_points'] = []
+                    item['interactive_points'].append(unmatched_objects[idx]['world_pos'])
+            for idx, new_text in enumerate(txt_corr):
+                for item_name in unmatched_texts[idx]['item_names']:
+                    item = process_items[item_name]
+                    if 'text' not in item['item_type']:
+                        item['description'] = item['description'] + ";" + new_text['desc']
+                        item['description_vector'] = embedding_model.embed(item['description'])
+                    item['item_type'] = item['item_type'] + ";" + 'text'
+                    if item['interactive_points'] is None:
+                        item['interactive_points'] = []
+                    item['interactive_points'].append(unmatched_texts[idx]['world_pos'])
+            # # 第一阶段：仅更新匹配到的项
+            # if matched_nodes:
+            #     # 注意：upsert 会以 tags[0] 作为 item_name，item_id 将按名称去重生成；
+            #     # 这里仅用于更新已有项的位置，因此 tags[0] 使用已有 item_name
+            #     _ = db_manager.upsert_scene_items_batch(scene_id, matched_nodes)
             
             # 第二阶段：对未匹配的新项进行 VLM 更正后写入
-            if unmatched_indices:
-                print("\n=== 第二阶段：对未匹配项进行 VLM 更正并写入 ===")
-                # 拆分对象与文字
-                unmatched_objects = [detection_results[i] for i in unmatched_indices if detection_results[i]['type'] == 'object']
-                unmatched_texts_raw = [detection_results[i] for i in unmatched_indices if detection_results[i]['type'] == 'text']
-                # 调整文字为 VL 所需精简格式
-                unmatched_texts = [
-                    {
-                        'index': k + 1,
-                        'x1': t['x1'], 'y1': t['y1'], 'x2': t['x2'], 'y2': t['y2'],
-                        'conf': t['conf'], 'text_content': t.get('text_content', '')
+            # if unmatched_indices:
+            #     print("\n=== 第二阶段：对未匹配项进行 VLM 更正并写入 ===")
+            #     # 拆分对象与文字
+            #     unmatched_objects = [detection_results[i] for i in unmatched_indices if detection_results[i]['type'] == 'object']
+            #     unmatched_texts_raw = [detection_results[i] for i in unmatched_indices if detection_results[i]['type'] == 'text']
+            #     # 调整文字为 VL 所需精简格式
+            #     unmatched_texts = [
+            #         {
+            #             'index': k + 1,
+            #             'x1': t['x1'], 'y1': t['y1'], 'x2': t['x2'], 'y2': t['y2'],
+            #             'conf': t['conf'], 'text_content': t.get('text_content', '')
+            #         }
+            #         for k, t in enumerate(unmatched_texts_raw)
+            #     ]
+            #     # VLM 更正
+            #     obj_corr = correct_detection_with_vl(chat_model, look_url, unmatched_objects) if unmatched_objects else []
+            #     txt_corr = correct_ocr_with_vl(chat_model, look_url, unmatched_texts) if unmatched_texts else []
+            #     # 组装第二批待写入节点（新项）
+            #     batch_new_nodes = []
+            #     # 对象
+            #     for j, det in enumerate(unmatched_objects):
+            #         corrected_name = obj_corr[j].get('corrected_class', det.get('class_name', 'Unknown')) if obj_corr and j < len(obj_corr) else det.get('class_name', 'Unknown')
+            #         corrected_desc = obj_corr[j].get('desc', corrected_name) if obj_corr and j < len(obj_corr) else corrected_name
+            #         desc_vec = embedding_model.embed(corrected_desc) if corrected_desc else []
+            #         idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is det][0]]
+            #         wp = world_positions[idx]
+            #         ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
+            #         half = max(0.01, float(ws) / 2.0)
+            #         bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
+            #         bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
+            #         item_type = unmatched_objects[j].get('class_name', 'Unknown')
+            #         index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
+            #         item_id = f"{item_type}_{index}"
+            #         node = {
+            #             'item_type': item_type,
+            #             'item_name': corrected_name,
+            #             'description': corrected_desc,
+            #             'description_vector': desc_vec,
+            #             'translation': wp,
+            #             'extras': {
+            #                 'tags': [item_id],
+            #                 'boundingBox': {
+            #                     'min': bb_min,
+            #                     'max': bb_max
+            #                 },
+            #                 'actions': {},
+            #                 'skills': {},
+            #                 'detection_type': det['type'],
+            #                 'confidence': det['conf'],
+            #                 'class_id': det.get('class_id', -1),
+            #                 'original_class': det.get('class_name', 'Unknown')
+            #             }
+            #         }
+            #         batch_new_nodes.append(node)
+            #     # 文字
+            #     for j, t in enumerate(unmatched_texts_raw):
+            #         text_val = txt_corr[j].get('text_content', t.get('text_content', '')) if txt_corr and j < len(txt_corr) else t.get('text_content', '')
+            #         desc_val = f"文字: {text_val}" if text_val else 'text'
+            #         desc_vec = embedding_model.embed(desc_val) if desc_val else []
+            #         idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is t][0]]
+            #         wp = world_positions[idx]
+            #         ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
+            #         half = max(0.01, float(ws) / 2.0)
+            #         bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
+            #         bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
+            #         index = len(item_type_groups['text']) if 'text' in item_type_groups else 0
+            #         item_id = f"text_{index}"
+            #         node = {
+            #             'item_type': 'text',
+            #             'item_name': '文字内容',
+            #             'description': desc_val,
+            #             'description_vector': desc_vec,
+            #             'translation': wp,
+            #             'extras': {
+            #                 'tags': [item_id],
+            #                 'boundingBox': {
+            #                     'min': bb_min,
+            #                     'max': bb_max
+            #                 },
+            #                 'actions': {},
+            #                 'skills': {},
+            #                 'detection_type': 'text',
+            #                 'confidence': t['conf'],
+            #                 'class_id': t.get('class_id', -1),
+            #                 'original_class': 'text'
+            #             }
+            #         }
+            #         batch_new_nodes.append(node)
+
+            batch_new_nodes = []
+            for item in process_items.values():
+                node = {
+                    'item_type': item['item_type'],
+                    'name': item['item_name'],
+                    'label_name': item['label_name'],
+                    'translation': [item['world_pos_x'], item['world_pos_y'], item['world_pos_z']],
+                    'description': item['description'],
+                    'description_vector': item['description_vector'],
+                    'interactive_points': item['interactive_points'],
+                    'extras': {
+                        'tags': [item['item_id']],
+                        'boundingBox': {
+                            'min': [item['world_bb_x'], item['world_bb_y'], item['world_bb_z']],
+                            'max': [item['world_bb_x'] + item['world_bb_w'], item['world_bb_y'] + item['world_bb_h'], item['world_bb_z'] + item['world_bb_d']]
+                        },
+                        'actions': item['actions'],
+                        'skills': item['skills']
                     }
-                    for k, t in enumerate(unmatched_texts_raw)
-                ]
-                # VLM 更正
-                obj_corr = correct_detection_with_vl(chat_model, look_url, unmatched_objects) if unmatched_objects else []
-                txt_corr = correct_ocr_with_vl(chat_model, look_url, unmatched_texts) if unmatched_texts else []
-                # 组装第二批待写入节点（新项）
-                batch_new_nodes = []
-                # 对象
-                for j, det in enumerate(unmatched_objects):
-                    corrected_name = obj_corr[j].get('corrected_class', det.get('class_name', 'Unknown')) if obj_corr and j < len(obj_corr) else det.get('class_name', 'Unknown')
-                    corrected_desc = obj_corr[j].get('desc', corrected_name) if obj_corr and j < len(obj_corr) else corrected_name
-                    desc_vec = embedding_model.embed(corrected_desc) if corrected_desc else []
-                    idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is det][0]]
-                    wp = world_positions[idx]
-                    ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
-                    half = max(0.01, float(ws) / 2.0)
-                    bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
-                    bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
-                    item_type = unmatched_objects[j].get('class_name', 'Unknown')
-                    index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
-                    item_id = f"{item_type}_{index}"
-                    node = {
-                        'item_type': item_type,
-                        'item_name': corrected_name,
-                        'description': corrected_desc,
-                        'description_vector': desc_vec,
-                        'translation': wp,
-                        'extras': {
-                            'tags': [item_id],
-                            'boundingBox': {
-                                'min': bb_min,
-                                'max': bb_max
-                            },
-                            'actions': {},
-                            'skills': {},
-                            'detection_type': det['type'],
-                            'confidence': det['conf'],
-                            'class_id': det.get('class_id', -1),
-                            'original_class': det.get('class_name', 'Unknown')
-                        }
-                    }
-                    batch_new_nodes.append(node)
-                # 文字
-                for j, t in enumerate(unmatched_texts_raw):
-                    text_val = txt_corr[j].get('text_content', t.get('text_content', '')) if txt_corr and j < len(txt_corr) else t.get('text_content', '')
-                    desc_val = f"文字: {text_val}" if text_val else 'text'
-                    desc_vec = embedding_model.embed(desc_val) if desc_val else []
-                    idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is t][0]]
-                    wp = world_positions[idx]
-                    ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
-                    half = max(0.01, float(ws) / 2.0)
-                    bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
-                    bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
-                    index = len(item_type_groups['text']) if 'text' in item_type_groups else 0
-                    item_id = f"text_{index}"
-                    node = {
-                        'item_type': 'text',
-                        'item_name': '文字内容',
-                        'description': desc_val,
-                        'description_vector': desc_vec,
-                        'translation': wp,
-                        'extras': {
-                            'tags': [item_id],
-                            'boundingBox': {
-                                'min': bb_min,
-                                'max': bb_max
-                            },
-                            'actions': {},
-                            'skills': {},
-                            'detection_type': 'text',
-                            'confidence': t['conf'],
-                            'class_id': t.get('class_id', -1),
-                            'original_class': 'text'
-                        }
-                    }
-                    batch_new_nodes.append(node)
-                if batch_new_nodes:
-                    _ = db_manager.upsert_scene_items_batch(scene_id, batch_new_nodes)
+                }
+                batch_new_nodes.append(node)
+
+            _ = db_manager.upsert_scene_items_batch(scene_id, batch_new_nodes)
                 
         except Exception as e:
             print(f"❌ 批量存储对象到数据库时发生错误: {e}")
     # 无需清理临时目录（已全程使用内存数据）
+
+def label_objects(user_id:str, chat_id:str):
+    chat_model = ChatModel(
+        model_name=os.environ.get("VLM_MODEL_NAME", "doubao-seed-1-6-vision-250815"),
+        api_key=os.environ.get("VLM_API_KEY", "dc7e10e7-1095-40ae-a172-3a7d16fc1e61"),
+        api_base=os.environ.get("VLM_API_BASE", "https://ark.cn-beijing.volces.com/api/v3"),
+        model_provider="openai"
+    )
+    embedding_model = EmbeddingModel(
+        model_name=os.environ.get("EMB_MODEL_NAME", "doubao-embedding-large-text-250515"),
+        api_key=os.environ.get("VLM_API_KEY", "dc7e10e7-1095-40ae-a172-3a7d16fc1e61"),
+        api_base=os.environ.get("VLM_API_BASE", "https://ark.cn-beijing.volces.com/api/v3"),
+    )
+    # desc_vec = embedding_model.embed("海报")
+    # user_info = UserInfoManager().get_user_info_by_user_id(user_id)
+    # scene_id = user_info.current_scene_id
+    # items = SceneItemsManager().search_items_by_description_vector(scene_id, desc_vec, top_k=10)
+    # print(f"desc_vec: {items}")
+    look_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/look.jpg"
+    cam_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/cam.json"
+    # 直接下载为内存数据（不落地临时文件）
+    try:
+        print(f"正在下载 look.jpg: {look_url}")
+        resp_look = requests.get(look_url, timeout=30)
+        resp_look.raise_for_status()
+        look_bytes = np.frombuffer(resp_look.content, dtype=np.uint8)
+        look_img = cv2.imdecode(look_bytes, cv2.IMREAD_COLOR)
+        if look_img is None:
+            raise RuntimeError("look.jpg 解析失败")
+        print("look.jpg 下载并解析完成")
+
+        print(f"正在下载 cam.json: {cam_url}")
+        resp_cam = requests.get(cam_url, timeout=30)
+        resp_cam.raise_for_status()
+        cam_data = json.loads(resp_cam.content.decode('utf-8'))
+        print("cam.json 下载并解析完成")
+    except Exception as e:
+        raise Exception(f"下载资源失败: {e}")
+    
+    try:
+        print(f"正在解析 cam.json（内存）")
+        print(f"cam.json 下载成功，包含 {len(cam_data)} 个键")
+        
+        # 构建正方形viewport的投影矩阵，替代从cam_data读取的矩阵
+        # print("构建正方形viewport的投影矩阵...")
+        # proj_matrix = build_perspective_projection_matrix(
+        #     fov_degrees=90.0,  # 60度视场角
+        #     aspect_ratio=1.0,  # 正方形viewport
+        #     near=0.1,          # 近裁剪面
+        #     far=100000.0         # 远裁剪面
+        # )
+        # print(f"构建的投影矩阵:\n{proj_matrix}")
+        def yaw_in_camera_space(angle_rad: float) -> np.ndarray:
+            c = np.cos(angle_rad)
+            s = np.sin(angle_rad)
+            R = np.eye(4)
+            # 绕相机Z轴旋转（左手系）
+            R[0, 0] =  c; R[0, 1] = -s
+            R[1, 0] =  s; R[1, 1] =  c
+            return R
+        # 优先读取分离的 view 矩阵
+        view_matrix = cam_data.get('view_matrix')
+        proj_matrix = cam_data.get('projection_matrix')
+        view_matrix = np.array([view_matrix[i*4:(i+1)*4] for i in range(4)], dtype=np.float64)
+        # view_matrix = np.linalg.inv(view_matrix)
+        proj_matrix = np.array([proj_matrix[i*4:(i+1)*4] for i in range(4)], dtype=np.float64)
+        vp_matrix = view_matrix @ proj_matrix
+        vp_matrix = vp_matrix.T
+
+        # print(f"view_matrix: {view_matrix}")
+        # print(f"proj_matrix: {proj_matrix}")
+        
+        # if isinstance(view_m, list) and len(view_m) == 16:
+        #     view_matrix = np.array([view_m[i*4:(i+1)*4] for i in range(4)], dtype=np.float64).transpose()
+        #     print("已解析 view 矩阵 (4x4)")
+        #     try:
+        #         inv_proj_matrix = np.linalg.inv(proj_matrix)
+        #         inv_view_matrix = np.linalg.inv(view_matrix)
+        #         camera_position = inv_view_matrix[:3, 3]
+        #         cam_fwd_h = inv_view_matrix @ np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float64)
+        #         camera_forward = cam_fwd_h[:3]
+        #         n = np.linalg.norm(camera_forward)
+        #         if n > 0:
+        #             camera_forward = camera_forward / n
+        #     except Exception as e:
+        #         print(f"计算 inv_proj/inv_view 或相机参数失败: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"下载 cam.json 失败: {e}")
+    except json.JSONDecodeError as e:
+        print(f"解析 cam.json 失败: {e}")
+    except Exception as e:
+        print(f"处理 cam.json 时出错: {e}")
+    
+    try:
+        print("\n=== 第一阶段：匹配已有项并批量更新坐标 ===")
+        img_h, img_w = (look_img.shape[0], look_img.shape[1]) if look_img is not None else (1080, 1920)
+        db_manager = SceneItemsManager()
+        
+        # 获取场景ID（用于距离匹配与写库）
+        user_info = UserInfoManager().get_user_info_by_user_id(user_id)
+        scene_id = "d8943faa-bf00-481b-95af-c73bd04c1eb7"# user_info.current_scene_id
+
+        view_proj_matrix = vp_matrix
+        existing_items = db_manager.query_items_in_frustum_by_vp(scene_id, view_proj_matrix)
+        # 先为全部检测计算世界坐标
+        matched_nodes = []
+        unmatched_indices = []
+        world_positions = []
+        world_sizes = []
+        base_names: List[str] = []
+        # VLM 更正
+        obj_corr = correct_detection_with_vl(chat_model, look_url, existing_items)
+        # 组装第二批待写入节点（新项）
+        batch_new_nodes = []
+        # 对象
+        for j, det in enumerate(obj_corr):
+            corrected_name = obj_corr[j].get('corrected_class', det.get('class_name', 'Unknown')) if obj_corr and j < len(obj_corr) else det.get('class_name', 'Unknown')
+            corrected_desc = obj_corr[j].get('desc', corrected_name) if obj_corr and j < len(obj_corr) else corrected_name
+            desc_vec = embedding_model.embed(corrected_desc) if corrected_desc else []
+            idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is det][0]]
+            wp = world_positions[idx]
+            ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
+            half = max(0.01, float(ws) / 2.0)
+            bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
+            bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
+            item_type = unmatched_objects[j].get('class_name', 'Unknown')
+            index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
+            item_id = f"{item_type}_{index}"
+            node = {
+                'item_type': item_type,
+                'item_name': corrected_name,
+                'description': corrected_desc,
+                'description_vector': desc_vec,
+                'translation': wp,
+                'extras': {
+                    'tags': [item_id],
+                    'boundingBox': {
+                        'min': bb_min,
+                        'max': bb_max
+                    },
+                    'actions': {},
+                    'skills': {},
+                    'detection_type': det['type'],
+                    'confidence': det['conf'],
+                    'class_id': det.get('class_id', -1),
+                    'original_class': det.get('class_name', 'Unknown')
+                }
+            }
+            batch_new_nodes.append(node)
+            if batch_new_nodes:
+                _ = db_manager.upsert_scene_items_batch(scene_id, batch_new_nodes)
+            
+    except Exception as e:
+        print(f"❌ 批量存储对象到数据库时发生错误: {e}")
 
