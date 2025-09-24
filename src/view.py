@@ -963,88 +963,92 @@ def handle_position(user_id:str, chat_id:str):
             #         existing_items = db_manager.get_scene_items_in_frustum_by_view_proj(view_proj_matrix, existing_items)
             # except Exception as _:
             #     pass
-            item_type_groups = {}
-            for type in base_names:
-                if type not in item_type_groups:
-                    item_type_groups[type] = db_manager.get_scene_items_by_type(scene_id, type)
+            # item_type_groups = {}
+            # for type in base_names:
+            #     if type not in item_type_groups:
+            #         item_type_groups[type] = db_manager.get_scene_items_by_type(scene_id, type)
+            # view_proj_matrix = view_matrix @ proj_matrix
+            # existing_items = db_manager.query_items_in_frustum_by_vp(scene_id, view_proj_matrix)
+
             # AABB 相交匹配（同类型/前缀），相交则认为同一ID；如多项相交，取交叠体积最大的
-            def nearest_existing_id(pos: list[float], base_name: str, size: float) -> str:
-                half = max(0.01, float(size) / 2.0)
-                new_min = [pos[0] - half, pos[1] - half, pos[2] - half]
-                new_max = [pos[0] + half, pos[1] + half, pos[2] + half]
+            # def nearest_existing_id(pos: list[float], base_name: str, size: float) -> str:
+            #     half = max(0.01, float(size) / 2.0)
+            #     new_min = [pos[0] - half, pos[1] - half, pos[2] - half]
+            #     new_max = [pos[0] + half, pos[1] + half, pos[2] + half]
 
-                def overlap1d(a_min: float, a_max: float, b_min: float, b_max: float) -> float:
-                    return max(0.0, min(a_max, b_max) - max(a_min, b_min))
+            #     def overlap1d(a_min: float, a_max: float, b_min: float, b_max: float) -> float:
+            #         return max(0.0, min(a_max, b_max) - max(a_min, b_min))
 
-                def overlap_volume(a_min, a_max, b_min, b_max) -> float:
-                    ox = overlap1d(a_min[0], a_max[0], b_min[0], b_max[0])
-                    oy = overlap1d(a_min[1], a_max[1], b_min[1], b_max[1])
-                    oz = overlap1d(a_min[2], a_max[2], b_min[2], b_max[2])
-                    return ox * oy * oz
+            #     def overlap_volume(a_min, a_max, b_min, b_max) -> float:
+            #         ox = overlap1d(a_min[0], a_max[0], b_min[0], b_max[0])
+            #         oy = overlap1d(a_min[1], a_max[1], b_min[1], b_max[1])
+            #         oz = overlap1d(a_min[2], a_max[2], b_min[2], b_max[2])
+            #         return ox * oy * oz
 
-                best_item = None
-                best_vol = 0.0
-                candidates = item_type_groups.get(base_name, [])
-                for item in candidates:
-                    it = item.to_dict()
-                    ex_min = [
-                        float(it.get('world_bb_x', it.get('world_pos_x', 0.0))),
-                        float(it.get('world_bb_y', it.get('world_pos_y', 0.0))),
-                        float(it.get('world_bb_z', it.get('world_pos_z', 0.0)))
-                    ]
-                    ex_max = [
-                        ex_min[0] + float(it.get('world_bb_w', 0.0)),
-                        ex_min[1] + float(it.get('world_bb_h', 0.0)),
-                        ex_min[2] + float(it.get('world_bb_d', 0.0))
-                    ]
-                    vol = overlap_volume(new_min, new_max, ex_min, ex_max)
-                    if vol > best_vol:
-                        best_vol = vol
-                        best_item = it
+            #     best_item = None
+            #     best_vol = 0.0
+            #     candidates = item_type_groups.get(base_name, [])
+            #     for item in candidates:
+            #         it = item.to_dict()
+            #         ex_min = [
+            #             float(it.get('world_bb_x', it.get('world_pos_x', 0.0))),
+            #             float(it.get('world_bb_y', it.get('world_pos_y', 0.0))),
+            #             float(it.get('world_bb_z', it.get('world_pos_z', 0.0)))
+            #         ]
+            #         ex_max = [
+            #             ex_min[0] + float(it.get('world_bb_w', 0.0)),
+            #             ex_min[1] + float(it.get('world_bb_h', 0.0)),
+            #             ex_min[2] + float(it.get('world_bb_d', 0.0))
+            #         ]
+            #         vol = overlap_volume(new_min, new_max, ex_min, ex_max)
+            #         if vol > best_vol:
+            #             best_vol = vol
+            #             best_item = it
 
-                return best_item if best_vol > 0.0 else None
+            #     return best_item if best_vol > 0.0 else None
             for idx, detection in enumerate(detection_results):
                 pos = world_positions[idx]
                 size = world_sizes[idx]
                 if pos is None:
                     unmatched_indices.append(idx)
                     continue
-                found = nearest_existing_id(pos, base_names[idx], size)
+                found = db_manager.query_item_include_position(scene_id, pos, 'unknown')
                 if found:
-                    base_name = detection.get('class_name', 'Unknown') if detection['type'] == 'object' else 'text'
-                    base_desc = detection.get('class_name', base_name) if detection['type'] == 'object' else detection.get('text_content','text')
-                    half = max(0.01, float(size) / 2.0)
-                    bb_min = [pos[0] - half, pos[1] - half, pos[2] - half]
-                    bb_max = [pos[0] + half, pos[1] + half, pos[2] + half]
-                    node_data = {
-                        'item_type': (found or {}).get('item_type', 'Unknown'),
-                        'item_name': (found or {}).get('item_name', 'Unknown'),
-                        'description': (found or {}).get('description', base_desc),
-                        'description_vector': (found or {}).get('description_vector', []),
-                        'translation': pos,
-                        'extras': {
-                            'tags': [(found or {}).get('item_id', base_name)],
-                            'boundingBox': {
-                                'min': bb_min,
-                                'max': bb_max
-                            },
-                            'actions': (found or {}).get('actions', {}),
-                            'skills': (found or {}).get('skills', {}),
-                            'detection_type': detection['type'],
-                            'confidence': detection['conf'],
-                            'class_id': detection.get('class_id', -1),
-                            'original_class': detection.get('class_name', 'Unknown')
-                        }
-                    }
-                    matched_nodes.append(node_data)
+                    continue
+                    # base_name = detection.get('class_name', 'Unknown') if detection['type'] == 'object' else 'text'
+                    # base_desc = detection.get('class_name', base_name) if detection['type'] == 'object' else detection.get('text_content','text')
+                    # half = max(0.01, float(size) / 2.0)
+                    # bb_min = [min(found.get('world_bb_x'), pos[0] - half), min(found.get('world_bb_y'), pos[1] - half), min(found.get('world_bb_z'), pos[2] - half)]
+                    # bb_max = [max(found.get('world_bb_x') + found.get('world_bb_w'), pos[0] + half), max(found.get('world_bb_y') + found.get('world_bb_h'), pos[1] + half), max(found.get('world_bb_z') + found.get('world_bb_d'), pos[2] + half)]
+                    # node_data = {
+                    #     'item_type': (found or {}).get('item_type', 'Unknown'),
+                    #     'item_name': (found or {}).get('item_name', 'Unknown'),
+                    #     'description': (found or {}).get('description', base_desc),
+                    #     'description_vector': (found or {}).get('description_vector', []),
+                    #     'translation': pos,
+                    #     'extras': {
+                    #         'tags': [(found or {}).get('item_id', base_name)],
+                    #         'boundingBox': {
+                    #             'min': bb_min,
+                    #             'max': bb_max
+                    #         },
+                    #         'actions': (found or {}).get('actions', {}),
+                    #         'skills': (found or {}).get('skills', {}),
+                    #         'detection_type': detection['type'],
+                    #         'confidence': detection['conf'],
+                    #         'class_id': detection.get('class_id', -1),
+                    #         'original_class': detection.get('class_name', 'Unknown')
+                    #     }
+                    # }
+                    # matched_nodes.append(node_data)
                 else:
                     unmatched_indices.append(idx)
             
             # 第一阶段：仅更新匹配到的项
-            if matched_nodes:
-                # 注意：upsert 会以 tags[0] 作为 item_name，item_id 将按名称去重生成；
-                # 这里仅用于更新已有项的位置，因此 tags[0] 使用已有 item_name
-                _ = db_manager.upsert_scene_items_batch(scene_id, matched_nodes)
+            # if matched_nodes:
+            #     # 注意：upsert 会以 tags[0] 作为 item_name，item_id 将按名称去重生成；
+            #     # 这里仅用于更新已有项的位置，因此 tags[0] 使用已有 item_name
+            #     _ = db_manager.upsert_scene_items_batch(scene_id, matched_nodes)
             
             # 第二阶段：对未匹配的新项进行 VLM 更正后写入
             if unmatched_indices:
@@ -1078,8 +1082,8 @@ def handle_position(user_id:str, chat_id:str):
                     bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
                     bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
                     item_type = unmatched_objects[j].get('class_name', 'Unknown')
-                    index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
-                    item_id = f"{item_type}_{index}"
+                    # index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
+                    item_id = item_type
                     node = {
                         'item_type': item_type,
                         'item_name': corrected_name,
@@ -1112,8 +1116,8 @@ def handle_position(user_id:str, chat_id:str):
                     half = max(0.01, float(ws) / 2.0)
                     bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
                     bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
-                    index = len(item_type_groups['text']) if 'text' in item_type_groups else 0
-                    item_id = f"text_{index}"
+                    # index = len(item_type_groups['text']) if 'text' in item_type_groups else 0
+                    item_id = "text"
                     node = {
                         'item_type': 'text',
                         'item_name': '文字内容',
