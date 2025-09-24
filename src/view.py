@@ -906,12 +906,14 @@ def handle_position(user_id:str, chat_id:str):
             db_manager = SceneItemsManager()
             
             # 获取场景ID（用于距离匹配与写库）
-            char_instance_info = CharInstanceInfoManager().get_char_instance_info_by_user_and_chat_id(user_id, chat_id)
-            scene_id = char_instance_info.current_scene_id
             scene_info = SceneInfoManager().get_scene_info_by_scene_name(scene_name)
-            if scene_info.scene_id != scene_id:
-                scene_id = scene_info.scene_id
+            scene_id = scene_info.scene_id
+            char_instance_info = CharInstanceInfoManager().get_char_instance_info_by_user_and_chat_id(user_id, chat_id)
+            if char_instance_info is None:
                 CharInstanceInfoManager().upsert_char_instance_info(user_id, chat_id, current_scene_id=scene_id)
+            else:
+                if char_instance_info.current_scene_id != scene_id:
+                    CharInstanceInfoManager().upsert_char_instance_info(user_id, chat_id, current_scene_id=scene_id)
             # 先为全部检测计算世界坐标
             matched_nodes = []
             unmatched_indices = []
