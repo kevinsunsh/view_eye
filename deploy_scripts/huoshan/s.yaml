@@ -6,7 +6,7 @@ vars:
   sid: "vieweyeservice"
   region: "cn-beijing"
   functionName: "view-eye-service-function"
-  version: "0.0.25"
+  version: "0.0.29"
 
 resources:
   view_eye_service:

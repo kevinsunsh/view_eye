@@ -19,6 +19,8 @@ except Exception:
     Imath = None  # type: ignore
 from agent_memory.user_info.manager import DBManager as UserInfoManager
 from agent_memory.prompt_manager.scene_iteams.manager import DBManager as SceneItemEntryManager
+from agent_memory.prompt_manager.scene_info.manager import DBManager as SceneInfoManager
+from agent_memory.prompt_manager.char_instance_info.manager import DBManager as CharInstanceInfoManager
 
 # --------------- 通用工具 ---------------
 def build_rts_matrix(translation: List[float], rotation_deg: List[float], scale: List[float]) -> np.ndarray:
@@ -847,6 +849,7 @@ def handle_position(user_id:str, chat_id:str):
         # 优先读取分离的 proj/view 矩阵
         proj = cam_data.get('projection_matrix')
         view_m = cam_data.get('view_matrix')
+        scene_name = cam_data.get('scene_name')
         # # 近远裁剪面（若提供）
         # if isinstance(cam_data.get('near'), (int, float)):
         #     near_plane = float(cam_data['near'])
@@ -903,8 +906,12 @@ def handle_position(user_id:str, chat_id:str):
             db_manager = SceneItemsManager()
             
             # 获取场景ID（用于距离匹配与写库）
-            user_info = UserInfoManager().get_user_info_by_user_id(user_id)
-            scene_id = user_info.current_scene_id
+            char_instance_info = CharInstanceInfoManager().get_char_instance_info_by_user_and_chat_id(user_id, chat_id)
+            scene_id = char_instance_info.current_scene_id
+            scene_info = SceneInfoManager().get_scene_info_by_scene_name(scene_name)
+            if scene_info.scene_id != scene_id:
+                scene_id = scene_info.scene_id
+                CharInstanceInfoManager().upsert_char_instance_info(user_id, chat_id, current_scene_id=scene_id)
             # 先为全部检测计算世界坐标
             matched_nodes = []
             unmatched_indices = []
