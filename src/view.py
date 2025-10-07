@@ -11,12 +11,13 @@ import os
 import numpy as np
 import tempfile
 import shutil
-try:
-    import OpenEXR  # type: ignore
-    import Imath  # type: ignore
-except Exception:
-    OpenEXR = None  # type: ignore
-    Imath = None  # type: ignore
+# EXR support removed - now using PNG depth maps
+# try:
+#     import OpenEXR  # type: ignore
+#     import Imath  # type: ignore
+# except Exception:
+#     OpenEXR = None  # type: ignore
+#     Imath = None  # type: ignore
 from agent_memory.user_info.manager import DBManager as UserInfoManager
 from agent_memory.prompt_manager.scene_iteams.manager import DBManager as SceneItemEntryManager
 from agent_memory.prompt_manager.scene_info.manager import DBManager as SceneInfoManager
@@ -179,72 +180,73 @@ def _extract_and_parse_json_array(text: str):
 # else:
 #     reader = easyocr.Reader(['ch_sim', 'en'])
 
-def fast_ocr(img_input):
-    """
-    使用EasyOCR识别图片中的文字，返回文字内容和位置信息
-    
-    Returns:
-        List[Dict]: 包含文字内容和边界框信息的列表
-    """
-    # 支持传入路径或内存中的图像(ndarray)
-    if isinstance(img_input, np.ndarray):
-        img = img_input
-    else:
-        img = cv2.imread(img_input)
-    original_h, original_w = img.shape[:2]
-    
-    # 可选：缩放图像到 800px 宽度以内加速
-    scale_factor = 1.0
-    if original_w > 800:
-        scale_factor = 800 / original_w
-        img = cv2.resize(img, (800, int(800 * original_h / original_w)))
-    
-    # EasyOCR返回格式: [[[x1,y1], [x2,y2], [x3,y3], [x4,y4]], text, confidence]
-    result = reader.readtext(img)
-    
-    # 调试信息：打印OCR返回的数据结构
-    print(f"EasyOCR返回结果类型: {type(result)}")
-    print(f"EasyOCR结果数量: {len(result)}")
-    if result:
-        print(f"第一个结果示例: {result[0]}")
-    
-    ocr_results = []
-    for i, detection in enumerate(result):
-        try:
-            # EasyOCR返回格式: [[[x1,y1], [x2,y2], [x3,y3], [x4,y4]], text, confidence]
-            points = detection[0]  # 四个点的坐标
-            text_content = detection[1]  # 文字内容
-            confidence = detection[2]  # 置信度
-            
-            print(f"处理OCR结果 {i}: 文字='{text_content}', 置信度={confidence:.3f}")
-            
-            # 计算边界框
-            x_coords = [point[0] for point in points]
-            y_coords = [point[1] for point in points]
-            x1, x2 = min(x_coords), max(x_coords)
-            y1, y2 = min(y_coords), max(y_coords)
-            
-            # 如果图像被缩放，需要将坐标还原到原始尺寸
-            if scale_factor != 1.0:
-                x1 = x1 / scale_factor
-                y1 = y1 / scale_factor
-                x2 = x2 / scale_factor
-                y2 = y2 / scale_factor
-            
-            ocr_results.append({
-                'text': text_content,
-                'confidence': confidence,
-                'x1': x1,
-                'y1': y1,
-                'x2': x2,
-                'y2': y2,
-                'type': 'text'  # 标记为文字类型
-            })
-        except Exception as e:
-            print(f"处理OCR结果时出错: {e}, detection={detection}")
-            continue
-    
-    return ocr_results
+# OCR function disabled - EasyOCR reader not initialized
+# def fast_ocr(img_input):
+#     """
+#     使用EasyOCR识别图片中的文字，返回文字内容和位置信息
+#     
+#     Returns:
+#         List[Dict]: 包含文字内容和边界框信息的列表
+#     """
+#     # 支持传入路径或内存中的图像(ndarray)
+#     if isinstance(img_input, np.ndarray):
+#         img = img_input
+#     else:
+#         img = cv2.imread(img_input)
+#     original_h, original_w = img.shape[:2]
+#     
+#     # 可选：缩放图像到 800px 宽度以内加速
+#     scale_factor = 1.0
+#     if original_w > 800:
+#         scale_factor = 800 / original_w
+#         img = cv2.resize(img, (800, int(800 * original_h / original_w)))
+#     
+#     # EasyOCR返回格式: [[[x1,y1], [x2,y2], [x3,y3], [x4,y4]], text, confidence]
+#     result = reader.readtext(img)
+#     
+#     # 调试信息：打印OCR返回的数据结构
+#     print(f"EasyOCR返回结果类型: {type(result)}")
+#     print(f"EasyOCR结果数量: {len(result)}")
+#     if result:
+#         print(f"第一个结果示例: {result[0]}")
+#     
+#     ocr_results = []
+#     for i, detection in enumerate(result):
+#         try:
+#             # EasyOCR返回格式: [[[x1,y1], [x2,y2], [x3,y3], [x4,y4]], text, confidence]
+#             points = detection[0]  # 四个点的坐标
+#             text_content = detection[1]  # 文字内容
+#             confidence = detection[2]  # 置信度
+#             
+#             print(f"处理OCR结果 {i}: 文字='{text_content}', 置信度={confidence:.3f}")
+#             
+#             # 计算边界框
+#             x_coords = [point[0] for point in points]
+#             y_coords = [point[1] for point in points]
+#             x1, x2 = min(x_coords), max(x_coords)
+#             y1, y2 = min(y_coords), max(y_coords)
+#             
+#             # 如果图像被缩放，需要将坐标还原到原始尺寸
+#             if scale_factor != 1.0:
+#                 x1 = x1 / scale_factor
+#                 y1 = y1 / scale_factor
+#                 x2 = x2 / scale_factor
+#                 y2 = y2 / scale_factor
+#             
+#             ocr_results.append({
+#                 'text': text_content,
+#                 'confidence': confidence,
+#                 'x1': x1,
+#                 'y1': y1,
+#                 'x2': x2,
+#                 'y2': y2,
+#                 'type': 'text'  # 标记为文字类型
+#             })
+#         except Exception as e:
+#             print(f"处理OCR结果时出错: {e}, detection={detection}")
+#             continue
+#     
+#     return ocr_results
 
 def cluster_ocr_results(ocr_results, distance_threshold=50):
     """
@@ -434,75 +436,76 @@ class EmbeddingModel():
             print(f"获取文本嵌入异常: {e}")
             return []
 
-def decode_exr_from_bytes_via_tempfile(exr_bytes: bytes) -> np.ndarray:
-    """
-    将字节写入临时 .exr 文件后使用 OpenEXR + Imath 读取。
-    返回 float64 的单通道深度矩阵；通道优先顺序：Z > R > Y > 任意。
-    """
-    if OpenEXR is None or Imath is None:
-        raise RuntimeError("OpenEXR/Imath 未安装，无法解析 EXR。")
-
-    with tempfile.NamedTemporaryFile(suffix=".exr", delete=False) as tmpf:
-        tmp_path = tmpf.name
-        tmpf.write(exr_bytes)
-        tmpf.flush()
-
-    try:
-        exr_file = OpenEXR.InputFile(tmp_path)
-        header = exr_file.header()
-        dw = header['dataWindow']
-        h = dw.max.y - dw.min.y + 1
-        w = dw.max.x - dw.min.x + 1
-
-        # 按你之前的优先级顺序尝试通道
-        channels_to_try = ['Y', 'Z', 'R', 'VIEW_Z', 'DEPTH']
-        available = set(header['channels'].keys())
-        chosen = None
-        arr = None
-        for ch in channels_to_try:
-            if ch not in available:
-                continue
-            # 先尝试 FLOAT，再尝试 HALF
-            try:
-                data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.FLOAT))
-                arr = np.frombuffer(data_str, dtype=np.float32)
-            except Exception:
-                try:
-                    data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.HALF))
-                    arr = np.frombuffer(data_str, dtype=np.float16).astype(np.float32)
-                except Exception:
-                    arr = None
-            if arr is not None and arr.size == h * w:
-                chosen = ch
-                break
-
-        # 如果上述优先级都未成功，尝试任意可用通道
-        if arr is None:
-            for ch in available:
-                try:
-                    data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.FLOAT))
-                    arr = np.frombuffer(data_str, dtype=np.float32)
-                except Exception:
-                    try:
-                        data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.HALF))
-                        arr = np.frombuffer(data_str, dtype=np.float16).astype(np.float32)
-                    except Exception:
-                        arr = None
-                if arr is not None and arr.size == h * w:
-                    chosen = ch
-                    break
-
-        if arr is None:
-            raise RuntimeError(f"未找到有效深度通道，尝试: {channels_to_try}")
-
-        arr = arr.reshape((h, w)).astype(np.float64)
-        print(f"depth.exr 读取成功，通道 {chosen}，shape={arr.shape}")
-        return arr
-    finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+# EXR decoding function removed - now using PNG depth maps
+# def decode_exr_from_bytes_via_tempfile(exr_bytes: bytes) -> np.ndarray:
+#     """
+#     将字节写入临时 .exr 文件后使用 OpenEXR + Imath 读取。
+#     返回 float64 的单通道深度矩阵；通道优先顺序：Z > R > Y > 任意。
+#     """
+#     if OpenEXR is None or Imath is None:
+#         raise RuntimeError("OpenEXR/Imath 未安装，无法解析 EXR。")
+#
+#     with tempfile.NamedTemporaryFile(suffix=".exr", delete=False) as tmpf:
+#         tmp_path = tmpf.name
+#         tmpf.write(exr_bytes)
+#         tmpf.flush()
+#
+#     try:
+#         exr_file = OpenEXR.InputFile(tmp_path)
+#         header = exr_file.header()
+#         dw = header['dataWindow']
+#         h = dw.max.y - dw.min.y + 1
+#         w = dw.max.x - dw.min.x + 1
+#
+#         # 按你之前的优先级顺序尝试通道
+#         channels_to_try = ['Y', 'Z', 'R', 'VIEW_Z', 'DEPTH']
+#         available = set(header['channels'].keys())
+#         chosen = None
+#         arr = None
+#         for ch in channels_to_try:
+#             if ch not in available:
+#                 continue
+#             # 先尝试 FLOAT，再尝试 HALF
+#             try:
+#                 data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.FLOAT))
+#                 arr = np.frombuffer(data_str, dtype=np.float32)
+#             except Exception:
+#                 try:
+#                     data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.HALF))
+#                     arr = np.frombuffer(data_str, dtype=np.float16).astype(np.float32)
+#                 except Exception:
+#                     arr = None
+#             if arr is not None and arr.size == h * w:
+#                 chosen = ch
+#                 break
+#
+#         # 如果上述优先级都未成功，尝试任意可用通道
+#         if arr is None:
+#             for ch in available:
+#                 try:
+#                     data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.FLOAT))
+#                     arr = np.frombuffer(data_str, dtype=np.float32)
+#                 except Exception:
+#                     try:
+#                         data_str = exr_file.channel(ch, Imath.PixelType(Imath.PixelType.HALF))
+#                         arr = np.frombuffer(data_str, dtype=np.float16).astype(np.float32)
+#                     except Exception:
+#                         arr = None
+#                 if arr is not None and arr.size == h * w:
+#                     chosen = ch
+#                     break
+#
+#         if arr is None:
+#             raise RuntimeError(f"未找到有效深度通道，尝试: {channels_to_try}")
+#
+#         arr = arr.reshape((h, w)).astype(np.float64)
+#         print(f"depth.exr 读取成功，通道 {chosen}，shape={arr.shape}")
+#         return arr
+#     finally:
+#         try:
+#             os.remove(tmp_path)
+#         except Exception:
+#             pass
 
 def correct_ocr_with_vl(chat_model, image_path: str, ocr_results: List[Dict]) -> List[Dict]:
     """
@@ -719,7 +722,7 @@ def handle_position(user_id:str, chat_id:str):
     # print(f"desc_vec: {items}")
     look_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/look.jpg"
     cam_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/cam.json"
-    depth_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/depth.exr"
+    depth_url = f"https://aura-view-eye.tos-cn-beijing.volces.com/assets/{user_id}/{chat_id}/view_data/depth.png"
 
     # 直接下载为内存数据（不落地临时文件）
     try:
@@ -738,11 +741,11 @@ def handle_position(user_id:str, chat_id:str):
         cam_data = json.loads(resp_cam.content.decode('utf-8'))
         print("cam.json 下载并解析完成")
 
-        print(f"正在下载 depth.exr: {depth_url}")
+        print(f"正在下载 depth.png: {depth_url}")
         resp_depth = requests.get(depth_url, timeout=30)
         resp_depth.raise_for_status()
         depth_content = resp_depth.content
-        print("depth.exr 下载完成（内存）")
+        print("depth.png 下载完成（内存）")
     except Exception as e:
         raise Exception(f"下载资源失败: {e}")
     
@@ -878,24 +881,35 @@ def handle_position(user_id:str, chat_id:str):
         print(f"解析 cam.json 失败: {e}")
     except Exception as e:
         print(f"处理 cam.json 时出错: {e}")
-    # 读取 EXR 线性深度图（内存）
+    # 读取 PNG 深度图（内存）
     try:
-        print(f"正在解析 depth.exr（内存）")
-        if OpenEXR is not None and Imath is not None:
-            depth_linear = decode_exr_from_bytes_via_tempfile(depth_content)
+        print(f"正在解析 depth.png（内存）")
+        # 使用 OpenCV 解码 PNG 深度图（保持位深/通道）
+        depth_buf = np.frombuffer(depth_content, dtype=np.uint8)
+        depth_img = cv2.imdecode(depth_buf, cv2.IMREAD_UNCHANGED)
+        if depth_img is None:
+            raise RuntimeError("depth.png 解码失败")
+
+        # 期望格式：32位色，float 分4字节压入 RGBA
+        # OpenCV 解码返回通道顺序为 BGRA（若有4通道）
+        if depth_img.ndim == 3 and depth_img.shape[2] == 4:
+            # 提取通道（B,G,R,A）
+            b = depth_img[:, :, 0]
+            g = depth_img[:, :, 1]
+            r = depth_img[:, :, 2]
+            a = depth_img[:, :, 3]
+            # 还原为小端序 float32 字节序列 [R,G,B,A]
+            rgba_bytes = np.stack([r, g, b, a], axis=-1).astype(np.uint8)
+            flat_bytes = rgba_bytes.reshape(-1, 4)
+            # 通过视图转换为 float32，再 reshape 回原尺寸
+            depth_f32 = flat_bytes.view(np.float32).reshape(depth_img.shape[0], depth_img.shape[1])
+            depth_linear = depth_f32.astype(np.float64)
         else:
-            # 回退：使用 OpenCV（若环境启用了 EXR）
-            depth_buf = np.frombuffer(depth_content, dtype=np.uint8)
-            depth_img = cv2.imdecode(depth_buf, cv2.IMREAD_UNCHANGED)
-            if depth_img is None:
-                raise RuntimeError("depth.exr 解码失败（OpenEXR 不可用且 OpenCV 未启用 EXR）")
-            if depth_img.ndim == 3 and depth_img.shape[2] >= 1:
-                depth_linear = depth_img[:, :, 0].astype(np.float64)
-            else:
-                depth_linear = depth_img.astype(np.float64)
-        print(f"depth.exr 解析成功，shape={depth_linear.shape}")
+            raise RuntimeError("depth.png 通道数不为4，无法按 RGBA 打包规则解析")
+
+        print(f"depth.png 解析成功（RGBA-packed float32），shape={depth_linear.shape}, 值范围=[{np.nanmin(depth_linear):.6f}, {np.nanmax(depth_linear):.6f}]")
     except Exception as e:
-        print(f"读取 depth.exr 失败: {e}")
+        print(f"读取 depth.png 失败: {e}")
     # 视口矩形
     view_rect = (0, 0, img_w, img_h)
     
