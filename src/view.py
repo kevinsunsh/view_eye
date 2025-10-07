@@ -172,12 +172,12 @@ def _extract_and_parse_json_array(text: str):
         raise ValueError(f"JSON解析失败: {e}. 片段: {snippet}")
 
 # 初始化EasyOCR，支持中文和英文（可指定模型目录）
-_easyocr_model_dir = os.environ.get("EASYOCR_MODEL_DIR", "./easyocr_model")
-if _easyocr_model_dir and os.path.isdir(_easyocr_model_dir):
-    print(f"使用自定义 EasyOCR 模型目录: {_easyocr_model_dir}")
-    reader = easyocr.Reader(['ch_sim', 'en'], model_storage_directory=_easyocr_model_dir, download_enabled=False)
-else:
-    reader = easyocr.Reader(['ch_sim', 'en'])
+# _easyocr_model_dir = os.environ.get("EASYOCR_MODEL_DIR", "./easyocr_model")
+# if _easyocr_model_dir and os.path.isdir(_easyocr_model_dir):
+#     print(f"使用自定义 EasyOCR 模型目录: {_easyocr_model_dir}")
+#     reader = easyocr.Reader(['ch_sim', 'en'], model_storage_directory=_easyocr_model_dir, download_enabled=False)
+# else:
+#     reader = easyocr.Reader(['ch_sim', 'en'])
 
 def fast_ocr(img_input):
     """
@@ -762,18 +762,18 @@ def handle_position(user_id:str, chat_id:str):
     print(f"检测到的对象数量: {len(result.boxes) if result.boxes is not None else 0}")
     
     # 使用EasyOCR识别文字
-    print("\n=== OCR文字识别 ===")
-    ocr_results = fast_ocr(look_img)
-    print(f"识别到的原始文字数量: {len(ocr_results)}")
+    # print("\n=== OCR文字识别 ===")
+    # ocr_results = fast_ocr(look_img)
+    # print(f"识别到的原始文字数量: {len(ocr_results)}")
     
     # 对OCR结果进行聚类
-    print("\n=== OCR结果聚类 ===")
-    clustered_ocr = cluster_ocr_results(ocr_results, distance_threshold=50)
-    print(f"聚类后的文字对象数量: {len(clustered_ocr)}")
+    # print("\n=== OCR结果聚类 ===")
+    # clustered_ocr = cluster_ocr_results(ocr_results, distance_threshold=50)
+    # print(f"聚类后的文字对象数量: {len(clustered_ocr)}")
     
-    for i, ocr_item in enumerate(clustered_ocr):
-        print(f"  文字对象 {i+1}: '{ocr_item['text']}' (置信度: {ocr_item['confidence']:.3f})")
-        print(f"    位置: ({ocr_item['x1']:.1f}, {ocr_item['y1']:.1f}) 到 ({ocr_item['x2']:.1f}, {ocr_item['y2']:.1f})")
+    # for i, ocr_item in enumerate(clustered_ocr):
+    #     print(f"  文字对象 {i+1}: '{ocr_item['text']}' (置信度: {ocr_item['confidence']:.3f})")
+    #     print(f"    位置: ({ocr_item['x1']:.1f}, {ocr_item['y1']:.1f}) 到 ({ocr_item['x2']:.1f}, {ocr_item['y2']:.1f})")
     
     # 解析检测框信息并准备VL修正
     detection_results = []
@@ -783,6 +783,8 @@ def handle_position(user_id:str, chat_id:str):
             # 获取坐标
             xyxy = box.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
             conf = box.conf[0].cpu().numpy()  # 置信度
+            if conf < 0.5:
+                continue
             cls = int(box.cls[0].cpu().numpy())  # 类别ID
             
             class_name = result.names.get(cls, 'Unknown') if hasattr(result, 'names') and result.names else 'Unknown'
@@ -807,26 +809,26 @@ def handle_position(user_id:str, chat_id:str):
             print(f"    类别名称: {class_name}")
     
     # 将聚类后的OCR结果添加到检测结果中
-    print("\n=== 合并聚类后的OCR文字检测结果 ===")
-    for i, ocr_item in enumerate(clustered_ocr):
-        ocr_detection = {
-            'index': len(detection_results) + i + 1,
-            'x1': ocr_item['x1'],
-            'y1': ocr_item['y1'],
-            'x2': ocr_item['x2'],
-            'y2': ocr_item['y2'],
-            'conf': ocr_item['confidence'],
-            'class_id': -1,  # OCR文字使用特殊ID
-            'class_name': 'text',
-            'text_content': ocr_item['text'],  # 存储聚类后的文字内容
-            'type': 'text'  # 标记为文字类型
-        }
-        detection_results.append(ocr_detection)
-        print(f"  文字对象 {i+1}: '{ocr_item['text']}' (置信度: {ocr_item['confidence']:.3f})")
+    # print("\n=== 合并聚类后的OCR文字检测结果 ===")
+    # for i, ocr_item in enumerate(clustered_ocr):
+    #     ocr_detection = {
+    #         'index': len(detection_results) + i + 1,
+    #         'x1': ocr_item['x1'],
+    #         'y1': ocr_item['y1'],
+    #         'x2': ocr_item['x2'],
+    #         'y2': ocr_item['y2'],
+    #         'conf': ocr_item['confidence'],
+    #         'class_id': -1,  # OCR文字使用特殊ID
+    #         'class_name': 'text',
+    #         'text_content': ocr_item['text'],  # 存储聚类后的文字内容
+    #         'type': 'text'  # 标记为文字类型
+    #     }
+    #     detection_results.append(ocr_detection)
+    #     print(f"  文字对象 {i+1}: '{ocr_item['text']}' (置信度: {ocr_item['confidence']:.3f})")
     
     print(f"\n=== 总检测结果统计 ===")
     print(f"YOLO检测对象数量: {len([d for d in detection_results if d['type'] == 'object'])}")
-    print(f"OCR识别文字数量: {len([d for d in detection_results if d['type'] == 'text'])}")
+    # print(f"OCR识别文字数量: {len([d for d in detection_results if d['type'] == 'text'])}")
     print(f"总检测数量: {len(detection_results)}")
     
     # 分离YOLO和OCR结果
@@ -913,7 +915,7 @@ def handle_position(user_id:str, chat_id:str):
                 CharInstanceInfoManager().upsert_char_instance_info(user_id, chat_id, current_scene_id=scene_id)
             else:
                 if char_instance_info.current_scene_id != scene_id:
-                    CharInstanceInfoManager().upsert_char_instance_info(user_id, chat_id, current_scene_id=scene_id)
+                    CharInstanceInfoManager().upsert_char_instance_info(user_id, chat_id, current_scene_id=scene_id, view_matrix=char_instance_info.view_matrix, projection_matrix=char_instance_info.projection_matrix, char_status=char_instance_info.char_status)
             # 先为全部检测计算世界坐标
             matched_nodes = []
             unmatched_indices = []
@@ -972,10 +974,10 @@ def handle_position(user_id:str, chat_id:str):
             #         existing_items = db_manager.get_scene_items_in_frustum_by_view_proj(view_proj_matrix, existing_items)
             # except Exception as _:
             #     pass
-            # item_type_groups = {}
-            # for type in base_names:
-            #     if type not in item_type_groups:
-            #         item_type_groups[type] = db_manager.get_scene_items_by_type(scene_id, type)
+            item_type_groups = {}
+            for item_type in base_names:
+                if item_type not in item_type_groups:
+                    item_type_groups[item_type] = db_manager.get_scene_items_by_type(scene_id, item_type)
             # view_proj_matrix = view_matrix @ proj_matrix
             # existing_items = db_manager.query_items_in_frustum_by_vp(scene_id, view_proj_matrix)
 
@@ -1064,19 +1066,19 @@ def handle_position(user_id:str, chat_id:str):
                 print("\n=== 第二阶段：对未匹配项进行 VLM 更正并写入 ===")
                 # 拆分对象与文字
                 unmatched_objects = [detection_results[i] for i in unmatched_indices if detection_results[i]['type'] == 'object']
-                unmatched_texts_raw = [detection_results[i] for i in unmatched_indices if detection_results[i]['type'] == 'text']
+                # unmatched_texts_raw = [detection_results[i] for i in unmatched_indices if detection_results[i]['type'] == 'text']
                 # 调整文字为 VL 所需精简格式
-                unmatched_texts = [
-                    {
-                        'index': k + 1,
-                        'x1': t['x1'], 'y1': t['y1'], 'x2': t['x2'], 'y2': t['y2'],
-                        'conf': t['conf'], 'text_content': t.get('text_content', '')
-                    }
-                    for k, t in enumerate(unmatched_texts_raw)
-                ]
+                # unmatched_texts = [
+                #     {
+                #         'index': k + 1,
+                #         'x1': t['x1'], 'y1': t['y1'], 'x2': t['x2'], 'y2': t['y2'],
+                #         'conf': t['conf'], 'text_content': t.get('text_content', '')
+                #     }
+                #     for k, t in enumerate(unmatched_texts_raw)
+                # ]
                 # VLM 更正
                 obj_corr = correct_detection_with_vl(chat_model, look_url, unmatched_objects) if unmatched_objects else []
-                txt_corr = correct_ocr_with_vl(chat_model, look_url, unmatched_texts) if unmatched_texts else []
+                # txt_corr = correct_ocr_with_vl(chat_model, look_url, unmatched_texts) if unmatched_texts else []
                 # 组装第二批待写入节点（新项）
                 batch_new_nodes = []
                 # 对象
@@ -1091,8 +1093,8 @@ def handle_position(user_id:str, chat_id:str):
                     bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
                     bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
                     item_type = unmatched_objects[j].get('class_name', 'Unknown')
-                    # index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
-                    item_id = item_type
+                    index = len(item_type_groups[item_type]) if item_type in item_type_groups else 0
+                    item_id = f"{item_type}_{index}"
                     node = {
                         'item_type': item_type,
                         'item_name': corrected_name,
@@ -1115,39 +1117,39 @@ def handle_position(user_id:str, chat_id:str):
                     }
                     batch_new_nodes.append(node)
                 # 文字
-                for j, t in enumerate(unmatched_texts_raw):
-                    text_val = txt_corr[j].get('text_content', t.get('text_content', '')) if txt_corr and j < len(txt_corr) else t.get('text_content', '')
-                    desc_val = f"文字: {text_val}" if text_val else 'text'
-                    desc_vec = embedding_model.embed(desc_val) if desc_val else []
-                    idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is t][0]]
-                    wp = world_positions[idx]
-                    ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
-                    half = max(0.01, float(ws) / 2.0)
-                    bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
-                    bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
-                    # index = len(item_type_groups['text']) if 'text' in item_type_groups else 0
-                    item_id = "text"
-                    node = {
-                        'item_type': 'text',
-                        'item_name': '文字内容',
-                        'description': desc_val,
-                        'description_vector': desc_vec,
-                        'translation': wp,
-                        'extras': {
-                            'tags': [item_id],
-                            'boundingBox': {
-                                'min': bb_min,
-                                'max': bb_max
-                            },
-                            'actions': {},
-                            'skills': {},
-                            'detection_type': 'text',
-                            'confidence': t['conf'],
-                            'class_id': t.get('class_id', -1),
-                            'original_class': 'text'
-                        }
-                    }
-                    batch_new_nodes.append(node)
+                # for j, t in enumerate(unmatched_texts_raw):
+                #     text_val = txt_corr[j].get('text_content', t.get('text_content', '')) if txt_corr and j < len(txt_corr) else t.get('text_content', '')
+                #     desc_val = f"文字: {text_val}" if text_val else 'text'
+                #     desc_vec = embedding_model.embed(desc_val) if desc_val else []
+                #     idx = unmatched_indices[[i for i, k in enumerate(unmatched_indices) if detection_results[k] is t][0]]
+                #     wp = world_positions[idx]
+                #     ws = world_sizes[idx] if idx < len(world_sizes) else 0.3
+                #     half = max(0.01, float(ws) / 2.0)
+                #     bb_min = [wp[0] - half, wp[1] - half, wp[2] - half]
+                #     bb_max = [wp[0] + half, wp[1] + half, wp[2] + half]
+                #     index = len(item_type_groups['text']) if 'text' in item_type_groups else 0
+                #     item_id = f"text_{index}"
+                #     node = {
+                #         'item_type': 'text',
+                #         'item_name': '文字内容',
+                #         'description': desc_val,
+                #         'description_vector': desc_vec,
+                #         'translation': wp,
+                #         'extras': {
+                #             'tags': [item_id],
+                #             'boundingBox': {
+                #                 'min': bb_min,
+                #                 'max': bb_max
+                #             },
+                #             'actions': {},
+                #             'skills': {},
+                #             'detection_type': 'text',
+                #             'confidence': t['conf'],
+                #             'class_id': t.get('class_id', -1),
+                #             'original_class': 'text'
+                #         }
+                #     }
+                #     batch_new_nodes.append(node)
                 if batch_new_nodes:
                     _ = db_manager.upsert_scene_items_batch(scene_id, batch_new_nodes)
                 
