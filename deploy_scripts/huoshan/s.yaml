@@ -6,7 +6,7 @@ vars:
   sid: "vieweyeservice"
   region: "cn-beijing"
   functionName: "view-eye-service-function"
-  version: "0.0.39"
+  version: "0.0.47"
 
 resources:
   view_eye_service:
@@ -22,7 +22,7 @@ resources:
         Runtime: native/v1
         SourceType: image # 支持 image / zip
         Source: mengs-cn-beijing.cr.volces.com/aura/view_eye:${vars.version}
-        MemoryMB: 4096
+        MemoryMB: 16384
         Processor: cpu
         Envs:
           - Key: TOS_REGION
