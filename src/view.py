@@ -1000,12 +1000,12 @@ def handle_position(user_id:str, chat_id:str):
                         
                         # 确保区域有效
                         if x2 > x1 and y2 > y1:
-                            # 获取检测区域内的深度值并找到最小值
+                            # 获取检测区域内的深度值并找到中值
                             detection_depth_region = depth_linear[y1:y2, x1:x2]
                             # 过滤掉无效的深度值（通常为0或负数）
                             valid_depths = detection_depth_region[detection_depth_region > 0]
                             if len(valid_depths) > 0:
-                                depth_value = float(np.min(valid_depths))
+                                depth_value = float(np.median(valid_depths))
                             else:
                                 # 如果没有有效深度值，使用中心点
                                 u0 = int(np.clip(np.floor(cx_px), 0, img_w - 1))

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 设置新版本号
-NEW_VERSION="0.0.47"
+NEW_VERSION="0.0.49"
 
 # 尝试使用 Docker 命令
 echo "构建 Docker 镜像..."
